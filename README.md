@@ -1,12 +1,12 @@
 ﻿# ExpenseSync
 
-ExpenseSync is an offline-capable mobile expense reporting app for field employees and teams who need to record expenses where they don't always have a network connection. The .NET MAUI app keeps expenses in a local SQLite database on the device. A central ASP.NET Core API with its own SQLite database will be used to share expenses between users once synchronization is added in later weeks.
+ExpenseSync is a mobile expense reporting app for employees who need to log expenses while away from a reliable network connection. The .NET MAUI app stores expenses in a local SQLite database on the device. In later weeks, the app will sync with a central ASP.NET Core API (which has its own SQLite database) so users can share expenses.
 
-## Week 1 Progress — Planning & Setup
+## Week 1 Progress: Planning & Setup
 
 ### Domain entity
 
-The app is built around a single entity, **Expense**:
+The app has one entity, `Expense`:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -24,13 +24,13 @@ The app is built around a single entity, **Expense**:
 
 - Added `sqlite-net-pcl`.
 - `Data/ExpenseDatabase.cs` opens `expensesync.db3` in `FileSystem.AppDataDirectory` with `SQLiteAsyncConnection` and creates the `Expenses` table.
-- The home page shows whether the local database opened (**Ready**) and where the file is stored.
+- The home page shows "Ready" when the local database opens, along with the file's location.
 
 ### Server API
 
 - Created `src/ExpenseSync.Api`, an ASP.NET Core Minimal API.
 - Uses Entity Framework Core with SQLite (`ExpenseSyncDbContext`). The connection string is in `appsettings.json`, and an `InitialCreate` migration creates `expensesync-server.db` with an `Expenses` table when the API starts.
-- `GET /` confirms the API is running and `GET /health` confirms it can reach the server database.
+- `GET /` checks that the API is running, and `GET /health` checks that it can reach the server database.
 - The MAUI app does not connect to the API yet.
 
 ### Solution layout
@@ -48,4 +48,4 @@ ExpenseSync/
 
 - The solution builds with no warnings or errors.
 - The API starts, creates the server database, and `/health` reports the database as connected.
-- The MAUI app runs on Windows, shows the local database as **Ready**, and creates `expensesync.db3` with the `Expenses` table.
+- The MAUI app runs on Windows, shows "Ready", and creates `expensesync.db3` with the `Expenses` table.
