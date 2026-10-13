@@ -1,0 +1,11 @@
+@ExpenseSync.Api_HostAddress = http://localhost:5157
+
+GET {{ExpenseSync.Api_HostAddress}}/
+Accept: application/json
+
+###
+
+GET {{ExpenseSync.Api_HostAddress}}/health
+Accept: application/json
+
+###

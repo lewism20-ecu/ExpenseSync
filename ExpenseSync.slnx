@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ExpenseSync.Api/ExpenseSync.Api.csproj" />
+    <Project Path="src/ExpenseSync.App/ExpenseSync.App.csproj" />
+  </Folder>
+</Solution>
