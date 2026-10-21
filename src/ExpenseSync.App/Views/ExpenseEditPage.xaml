@@ -1,0 +1,60 @@
+<ContentPage
+    x:Class="ExpenseSync.App.Views.ExpenseEditPage"
+    xmlns:vm="clr-namespace:ExpenseSync.App.ViewModels"
+    x:DataType="vm:ExpenseEditViewModel"
+    Title="{Binding PageTitle}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16">
+
+            <VerticalStackLayout Spacing="4">
+                <Label Text="Description" FontFamily="OpenSansSemibold" />
+                <Entry
+                    AutomationId="DescriptionEntry"
+                    Text="{Binding Description}"
+                    Placeholder="What was this expense for?"
+                    MaxLength="200"
+                    ReturnType="Next" />
+            </VerticalStackLayout>
+
+            <VerticalStackLayout Spacing="4">
+                <Label Text="Amount" FontFamily="OpenSansSemibold" />
+                <Entry
+                    AutomationId="AmountEntry"
+                    Text="{Binding AmountText}"
+                    Placeholder="0.00"
+                    Keyboard="Numeric"
+                    ReturnType="Done" />
+            </VerticalStackLayout>
+
+            <VerticalStackLayout Spacing="4">
+                <Label Text="Date" FontFamily="OpenSansSemibold" />
+                <DatePicker
+                    AutomationId="ExpenseDatePicker"
+                    Date="{Binding ExpenseDate}" />
+            </VerticalStackLayout>
+
+            <Label
+                AutomationId="ErrorLabel"
+                Text="{Binding ErrorMessage}"
+                IsVisible="{Binding HasError}"
+                TextColor="{AppThemeBinding Light=#B00020, Dark=#FF8A80}"
+                FontSize="14" />
+
+            <Button
+                AutomationId="SaveExpenseButton"
+                Text="Save"
+                Command="{Binding SaveCommand}" />
+
+            <Button
+                AutomationId="DeleteExpenseButton"
+                Text="Delete"
+                Command="{Binding DeleteCommand}"
+                IsVisible="{Binding IsExisting}"
+                BackgroundColor="{AppThemeBinding Light=#B00020, Dark=#FF8A80}"
+                TextColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource Gray950}}" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>

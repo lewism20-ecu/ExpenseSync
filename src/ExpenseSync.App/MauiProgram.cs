@@ -27,6 +27,9 @@ public static class MauiProgram
 		// Pages and view models
 		builder.Services.AddSingleton<MainViewModel>();
 		builder.Services.AddSingleton<MainPage>();
+		// A fresh edit page/view model for every navigation
+		builder.Services.AddTransient<ExpenseEditViewModel>();
+		builder.Services.AddTransient<ExpenseEditPage>();
 
 #if DEBUG
 		builder.Logging.AddDebug();

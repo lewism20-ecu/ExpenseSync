@@ -1,12 +1,17 @@
 <ContentPage
     x:Class="ExpenseSync.App.Views.MainPage"
     xmlns:vm="clr-namespace:ExpenseSync.App.ViewModels"
+    xmlns:models="clr-namespace:ExpenseSync.App.Models"
     x:DataType="vm:MainViewModel"
-    Title="Home">
+    Title="Expenses">
 
-    <VerticalStackLayout Padding="20" Spacing="14">
+    <Grid
+        Padding="20"
+        RowDefinitions="Auto,Auto,*,Auto"
+        RowSpacing="14">
 
-        <VerticalStackLayout Spacing="6">
+        <!-- Header -->
+        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" RowSpacing="6">
             <Label
                 AutomationId="AppTitleLabel"
                 Text="ExpenseSync"
@@ -14,21 +19,27 @@
                 FontSize="28"
                 TextColor="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}"
                 SemanticProperties.HeadingLevel="Level1" />
+            <Button
+                Grid.Column="1"
+                AutomationId="AddExpenseButton"
+                Text="Add Expense"
+                Command="{Binding AddExpenseCommand}" />
             <Label
+                Grid.Row="1"
+                Grid.ColumnSpan="2"
                 AutomationId="AppDescriptionLabel"
                 Text="Record expenses on this device, even without a network connection."
                 FontSize="14"
                 TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray300}}" />
-        </VerticalStackLayout>
+        </Grid>
 
+        <!-- Local status -->
         <Border
+            Grid.Row="1"
             Padding="16"
             StrokeShape="RoundRectangle 8"
             BackgroundColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource OffBlack}}">
-            <Grid
-                ColumnDefinitions="*,Auto"
-                RowDefinitions="Auto,Auto"
-                RowSpacing="6">
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" RowSpacing="6">
                 <Label
                     Text="Local database"
                     FontFamily="OpenSansSemibold"
@@ -42,15 +53,76 @@
                     TextColor="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
                 <Label
                     Grid.Row="1"
-                    Grid.ColumnSpan="2"
-                    AutomationId="DatabasePathLabel"
-                    Text="{Binding DatabasePath}"
-                    FontSize="12"
-                    TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray300}}"
-                    LineBreakMode="CharacterWrap" />
+                    Text="Pending changes (not synced yet)"
+                    FontSize="14" />
+                <Label
+                    Grid.Row="1"
+                    Grid.Column="1"
+                    AutomationId="PendingChangeCount"
+                    Text="{Binding PendingChangeCount}"
+                    FontFamily="OpenSansSemibold"
+                    FontSize="14" />
             </Grid>
         </Border>
 
-    </VerticalStackLayout>
+        <!-- Expense list -->
+        <CollectionView
+            Grid.Row="2"
+            AutomationId="ExpenseList"
+            ItemsSource="{Binding Expenses}"
+            SelectionMode="None">
+            <CollectionView.EmptyView>
+                <Label
+                    AutomationId="EmptyListLabel"
+                    Text="No expenses yet. Tap Add Expense to record one."
+                    HorizontalOptions="Center"
+                    VerticalOptions="Center"
+                    TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray300}}" />
+            </CollectionView.EmptyView>
+            <CollectionView.ItemTemplate>
+                <DataTemplate x:DataType="models:Expense">
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="14,12"
+                        StrokeShape="RoundRectangle 8"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource OffBlack}}">
+                        <Border.GestureRecognizers>
+                            <TapGestureRecognizer
+                                Command="{Binding Source={RelativeSource AncestorType={x:Type vm:MainViewModel}}, Path=EditExpenseCommand}"
+                                CommandParameter="{Binding .}" />
+                        </Border.GestureRecognizers>
+                        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" RowSpacing="2">
+                            <Label
+                                Text="{Binding Description}"
+                                FontFamily="OpenSansSemibold"
+                                FontSize="16"
+                                LineBreakMode="TailTruncation" />
+                            <Label
+                                Grid.Column="1"
+                                Text="{Binding Amount, StringFormat='{0:C}'}"
+                                FontFamily="OpenSansSemibold"
+                                FontSize="16"
+                                TextColor="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+                            <Label
+                                Grid.Row="1"
+                                Text="{Binding ExpenseDate, StringFormat='{0:d}'}"
+                                FontSize="13"
+                                TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray300}}" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+        <!-- Database location -->
+        <Label
+            Grid.Row="3"
+            AutomationId="DatabasePathLabel"
+            Text="{Binding DatabasePath}"
+            FontSize="11"
+            TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray300}}"
+            LineBreakMode="CharacterWrap" />
+
+    </Grid>
 
 </ContentPage>

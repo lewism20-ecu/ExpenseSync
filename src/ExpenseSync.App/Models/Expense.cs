@@ -19,4 +19,10 @@ public class Expense
 
     // sqlite-net-pcl has no DateOnly support, so only the date part of this value is used.
     public DateTime ExpenseDate { get; set; } = DateTime.Today;
+
+    // UTC time the device last changed this record. Later weeks use it for sync and conflicts.
+    public DateTime LastModifiedUtc { get; set; }
+
+    // Deleted expenses are kept as tombstones so the delete can be synced later.
+    public bool IsDeleted { get; set; }
 }

@@ -1,6 +1,9 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ExpenseSync.App.Data;
+using ExpenseSync.App.Models;
+using ExpenseSync.App.Views;
 using Microsoft.Extensions.Logging;
 using SQLite;
 
@@ -18,24 +21,44 @@ public partial class MainViewModel : ObservableObject
         DatabasePath = database.DatabasePath;
     }
 
+    public ObservableCollection<Expense> Expenses { get; } = [];
+
     [ObservableProperty]
     public partial string DatabaseStatus { get; set; } = "Not opened";
 
     [ObservableProperty]
     public partial string DatabasePath { get; set; }
 
+    [ObservableProperty]
+    public partial int PendingChangeCount { get; set; }
+
     [RelayCommand]
-    private async Task InitializeAsync()
+    private async Task LoadExpensesAsync()
     {
         try
         {
-            await database.InitializeAsync();
+            var expenses = await database.GetExpensesAsync();
+            Expenses.Clear();
+            foreach (var expense in expenses)
+            {
+                Expenses.Add(expense);
+            }
+
+            PendingChangeCount = await database.GetPendingChangeCountAsync();
             DatabaseStatus = "Ready";
         }
         catch (SQLiteException ex)
         {
-            logger.LogError(ex, "Could not open the local database at {DatabasePath}", DatabasePath);
+            logger.LogError(ex, "Could not read the local database at {DatabasePath}", DatabasePath);
             DatabaseStatus = $"Error: {ex.Message}";
         }
     }
+
+    [RelayCommand]
+    private Task AddExpenseAsync() =>
+        Shell.Current.GoToAsync(nameof(ExpenseEditPage));
+
+    [RelayCommand]
+    private Task EditExpenseAsync(Expense expense) =>
+        Shell.Current.GoToAsync($"{nameof(ExpenseEditPage)}?expenseId={expense.ExpenseId}");
 }
