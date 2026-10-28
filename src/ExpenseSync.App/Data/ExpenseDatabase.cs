@@ -145,6 +145,46 @@ public class ExpenseDatabase
             .ToListAsync();
     }
 
+    /// <summary>Loads an expense row even if it is a tombstone.</summary>
+    public async Task<Expense?> GetExpenseIncludingDeletedAsync(Guid expenseId)
+    {
+        await InitializeAsync();
+        return await database!.Table<Expense>()
+            .Where(e => e.ExpenseId == expenseId)
+            .FirstOrDefaultAsync();
+    }
+
+    /// <summary>
+    /// Deletes only the given pending rows in one transaction, and hard-deletes tombstoned
+    /// expenses whose Delete was accepted.
+    /// </summary>
+    public async Task ClearPendingChangesAsync(IEnumerable<Guid> acceptedIds)
+    {
+        await InitializeAsync();
+        var ids = acceptedIds.ToHashSet();
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        await database!.RunInTransactionAsync(conn =>
+        {
+            foreach (var pending in conn.Table<PendingChange>().ToList().Where(p => ids.Contains(p.PendingChangeId)))
+            {
+                conn.Delete(pending);
+
+                if (pending.Operation == ChangeOperation.Delete)
+                {
+                    var expense = conn.Find<Expense>(pending.ExpenseId);
+                    if (expense is { IsDeleted: true })
+                    {
+                        conn.Delete(expense);
+                    }
+                }
+            }
+        });
+    }
+
     public async Task<int> GetPendingChangeCountAsync()
     {
         await InitializeAsync();

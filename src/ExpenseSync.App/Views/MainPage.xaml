@@ -39,7 +39,7 @@
             Padding="16"
             StrokeShape="RoundRectangle 8"
             BackgroundColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource OffBlack}}">
-            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" RowSpacing="6">
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6">
                 <Label
                     Text="Local database"
                     FontFamily="OpenSansSemibold"
@@ -62,6 +62,18 @@
                     Text="{Binding PendingChangeCount}"
                     FontFamily="OpenSansSemibold"
                     FontSize="14" />
+                <Button
+                    Grid.Row="2"
+                    Grid.ColumnSpan="2"
+                    AutomationId="SyncNowButton"
+                    Text="Sync now"
+                    Command="{Binding SyncNowCommand}" />
+                <Label
+                    Grid.Row="3"
+                    Grid.ColumnSpan="2"
+                    AutomationId="SyncStatusLabel"
+                    Text="{Binding SyncStatus}"
+                    FontSize="13" />
             </Grid>
         </Border>
 

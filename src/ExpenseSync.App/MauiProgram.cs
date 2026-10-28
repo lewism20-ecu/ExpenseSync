@@ -1,4 +1,5 @@
 using ExpenseSync.App.Data;
+using ExpenseSync.App.Services;
 using ExpenseSync.App.ViewModels;
 using ExpenseSync.App.Views;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,13 @@ public static class MauiProgram
 
 		// Local data (one shared SQLite connection for the whole app)
 		builder.Services.AddSingleton<ExpenseDatabase>();
+
+		// Sync (typed HttpClient; base URL comes from SyncSettings)
+		builder.Services.AddHttpClient<SyncService>(client =>
+		{
+			client.BaseAddress = new Uri(SyncSettings.BaseUrl);
+			client.Timeout = TimeSpan.FromSeconds(15);
+		});
 
 		// Pages and view models
 		builder.Services.AddSingleton<MainViewModel>();
