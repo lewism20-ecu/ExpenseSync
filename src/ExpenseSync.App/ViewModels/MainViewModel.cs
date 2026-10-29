@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ExpenseSync.App.Data;
 using ExpenseSync.App.Models;
+using ExpenseSync.App.Services;
 using ExpenseSync.App.Views;
 using Microsoft.Extensions.Logging;
 using SQLite;
@@ -14,9 +15,12 @@ public partial class MainViewModel : ObservableObject
     private readonly ExpenseDatabase database;
     private readonly ILogger<MainViewModel> logger;
 
-    public MainViewModel(ExpenseDatabase database, ILogger<MainViewModel> logger)
+    private readonly SyncService syncService;
+
+    public MainViewModel(ExpenseDatabase database, SyncService syncService, ILogger<MainViewModel> logger)
     {
         this.database = database;
+        this.syncService = syncService;
         this.logger = logger;
         DatabasePath = database.DatabasePath;
     }
@@ -31,6 +35,12 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     public partial int PendingChangeCount { get; set; }
+
+    [ObservableProperty]
+    public partial string SyncStatus { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial bool IsSyncing { get; set; }
 
     [RelayCommand]
     private async Task LoadExpensesAsync()
@@ -53,6 +63,27 @@ public partial class MainViewModel : ObservableObject
             DatabaseStatus = $"Error: {ex.Message}";
         }
     }
+
+    [RelayCommand(CanExecute = nameof(CanSync))]
+    private async Task SyncNowAsync()
+    {
+        IsSyncing = true;
+        SyncStatus = "Syncing...";
+        try
+        {
+            var result = await syncService.PushAsync();
+            SyncStatus = result.Message;
+            await LoadExpensesAsync();
+        }
+        finally
+        {
+            IsSyncing = false;
+        }
+    }
+
+    private bool CanSync() => !IsSyncing;
+
+    partial void OnIsSyncingChanged(bool value) => SyncNowCommand.NotifyCanExecuteChanged();
 
     [RelayCommand]
     private Task AddExpenseAsync() =>
