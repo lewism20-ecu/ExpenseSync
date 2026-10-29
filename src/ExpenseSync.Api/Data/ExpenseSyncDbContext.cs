@@ -37,6 +37,11 @@ public class ExpenseSyncDbContext(DbContextOptions<ExpenseSyncDbContext> options
                 .IsRequired()
                 .HasMaxLength(100);
 
+            // Store Create/Update/Delete as text so the table is readable, matching the device's PendingChanges.
+            change.Property(c => c.Operation)
+                .HasConversion<string>()
+                .HasMaxLength(10);
+
             change.Property(c => c.Description)
                 .HasMaxLength(200);
 

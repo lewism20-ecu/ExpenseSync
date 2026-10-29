@@ -94,8 +94,7 @@ public class ExpenseDatabase
             {
                 // A still-unsynced Create stays a Create; an Update stays an Update.
                 // Either way the server only needs the latest version of the row.
-                pending.CapturedAtUtc = now;
-                conn.Update(pending);
+                ReplacePendingChange(conn, pending, pending.Operation, now);
             }
         });
     }
@@ -128,9 +127,7 @@ public class ExpenseDatabase
             }
             else
             {
-                pending.Operation = ChangeOperation.Delete;
-                pending.CapturedAtUtc = now;
-                conn.Update(pending);
+                ReplacePendingChange(conn, pending, ChangeOperation.Delete, now);
             }
         });
     }
@@ -193,6 +190,15 @@ public class ExpenseDatabase
 
     private static PendingChange? FindPendingChange(SQLiteConnection conn, Guid expenseId) =>
         conn.Table<PendingChange>().FirstOrDefault(p => p.ExpenseId == expenseId);
+
+    // The merged row gets a new PendingChangeId. The server ignores IDs it has already stored,
+    // so reusing the old ID would drop this newer version if an earlier push reached the server
+    // but its response was lost.
+    private static void ReplacePendingChange(SQLiteConnection conn, PendingChange pending, ChangeOperation operation, DateTime capturedAtUtc)
+    {
+        conn.Delete(pending);
+        conn.Insert(NewPendingChange(pending.ExpenseId, operation, capturedAtUtc));
+    }
 
     private static PendingChange NewPendingChange(Guid expenseId, ChangeOperation operation, DateTime capturedAtUtc) =>
         new()
