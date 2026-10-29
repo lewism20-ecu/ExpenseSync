@@ -86,10 +86,14 @@ public static class SyncEndpoints
             .ToListAsync(cancellationToken);
 
         var accepted = new List<Guid>();
+        var hasNewRows = false;
         foreach (var change in dedupedChanges)
         {
+            // Already stored by an earlier attempt (e.g. the response was lost): acknowledge it
+            // again so the device can clear it, but do not insert a duplicate row.
             if (existingIds.Contains(change.PendingChangeId))
             {
+                accepted.Add(change.PendingChangeId);
                 continue;
             }
 
@@ -111,9 +115,10 @@ public static class SyncEndpoints
 
             db.ReceivedChanges.Add(record);
             accepted.Add(change.PendingChangeId);
+            hasNewRows = true;
         }
 
-        if (accepted.Count > 0)
+        if (hasNewRows)
         {
             await db.SaveChangesAsync(cancellationToken);
         }

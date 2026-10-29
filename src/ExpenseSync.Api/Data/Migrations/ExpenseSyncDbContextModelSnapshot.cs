@@ -15,7 +15,7 @@ partial class ExpenseSyncDbContextModelSnapshot : ModelSnapshot
     // If you encounter a merge conflict in the line below, it means you need to
     // discard one of the migration branches and recreate its migrations on top of
     // the other branch. See https://aka.ms/efcore-docs-migrations-conflicts for more info.
-    public override string LastMigrationId => "20261029023855_AddSyncTracking";
+    public override string LastMigrationId => "20261029031659_StoreOperationAsText";
 
     protected override void BuildModel(ModelBuilder modelBuilder)
     {
@@ -87,8 +87,10 @@ partial class ExpenseSyncDbContextModelSnapshot : ModelSnapshot
                 b.Property<DateTime>("LastModifiedUtc")
                     .HasColumnType("TEXT");
 
-                b.Property<int>("Operation")
-                    .HasColumnType("INTEGER");
+                b.Property<string>("Operation")
+                    .IsRequired()
+                    .HasMaxLength(10)
+                    .HasColumnType("TEXT");
 
                 b.Property<DateTime?>("ProcessedAtUtc")
                     .HasColumnType("TEXT");

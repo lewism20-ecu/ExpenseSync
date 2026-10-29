@@ -49,9 +49,10 @@ public class SyncService
                         continue;
                     }
 
+                    // sqlite-net stores decimal as REAL, so round off binary floating-point noise.
                     payload = new PushExpense(
                         expense.Description,
-                        expense.Amount,
+                        Math.Round(expense.Amount, 2),
                         DateOnly.FromDateTime(expense.ExpenseDate),
                         DateTime.SpecifyKind(expense.LastModifiedUtc, DateTimeKind.Utc));
                 }
