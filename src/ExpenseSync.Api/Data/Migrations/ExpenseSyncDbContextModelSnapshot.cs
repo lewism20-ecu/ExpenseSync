@@ -15,7 +15,7 @@ partial class ExpenseSyncDbContextModelSnapshot : ModelSnapshot
     // If you encounter a merge conflict in the line below, it means you need to
     // discard one of the migration branches and recreate its migrations on top of
     // the other branch. See https://aka.ms/efcore-docs-migrations-conflicts for more info.
-    public override string LastMigrationId => "20261013224142_InitialCreate";
+    public override string LastMigrationId => "20261029023855_AddSyncTracking";
 
     protected override void BuildModel(ModelBuilder modelBuilder)
     {
@@ -38,9 +38,68 @@ partial class ExpenseSyncDbContextModelSnapshot : ModelSnapshot
                 b.Property<DateOnly>("ExpenseDate")
                     .HasColumnType("TEXT");
 
+                b.Property<bool>("IsDeleted")
+                    .HasColumnType("INTEGER");
+
+                b.Property<string>("LastDeviceId")
+                    .IsRequired()
+                    .HasMaxLength(100)
+                    .HasColumnType("TEXT");
+
+                b.Property<DateTime>("LastModifiedUtc")
+                    .HasColumnType("TEXT");
+
                 b.HasKey("ExpenseId");
 
                 b.ToTable("Expenses");
+            });
+
+        modelBuilder.Entity("ExpenseSync.Api.Models.ReceivedChange", b =>
+            {
+                b.Property<Guid>("PendingChangeId")
+                    .HasColumnType("TEXT");
+
+                b.Property<decimal>("Amount")
+                    .HasColumnType("TEXT");
+
+                b.Property<DateTime>("CapturedAtUtc")
+                    .HasColumnType("TEXT");
+
+                b.Property<string>("Description")
+                    .IsRequired()
+                    .HasMaxLength(200)
+                    .HasColumnType("TEXT");
+
+                b.Property<string>("DeviceId")
+                    .IsRequired()
+                    .HasMaxLength(100)
+                    .HasColumnType("TEXT");
+
+                b.Property<DateOnly>("ExpenseDate")
+                    .HasColumnType("TEXT");
+
+                b.Property<Guid>("ExpenseId")
+                    .HasColumnType("TEXT");
+
+                b.Property<bool>("IsProcessed")
+                    .HasColumnType("INTEGER");
+
+                b.Property<DateTime>("LastModifiedUtc")
+                    .HasColumnType("TEXT");
+
+                b.Property<int>("Operation")
+                    .HasColumnType("INTEGER");
+
+                b.Property<DateTime?>("ProcessedAtUtc")
+                    .HasColumnType("TEXT");
+
+                b.HasKey("PendingChangeId");
+
+                b.HasIndex("IsProcessed");
+
+                b.HasIndex("IsProcessed", "CapturedAtUtc");
+
+                b.ToTable("ReceivedChanges");
             });
 #pragma warning restore 612, 618
     }
