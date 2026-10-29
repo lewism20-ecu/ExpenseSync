@@ -13,4 +13,10 @@ public class Expense
     public decimal Amount { get; set; }
 
     public DateOnly ExpenseDate { get; set; }
+
+    public DateTime LastModifiedUtc { get; set; }
+
+    public bool IsDeleted { get; set; }
+
+    public string LastDeviceId { get; set; } = string.Empty;
 }

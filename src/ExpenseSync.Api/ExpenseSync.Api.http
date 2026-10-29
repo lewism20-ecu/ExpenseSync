@@ -9,3 +9,31 @@ GET {{ExpenseSync.Api_HostAddress}}/health
 Accept: application/json
 
 ###
+
+POST {{ExpenseSync.Api_HostAddress}}/api/sync/push
+Content-Type: application/json
+
+{
+  "deviceId": "device-01",
+  "changes": [
+    {
+      "pendingChangeId": "11111111-1111-1111-1111-111111111111",
+      "expenseId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "operation": "Create",
+      "capturedAtUtc": "2025-01-01T12:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 42.5,
+        "expenseDate": "2025-01-01",
+        "lastModifiedUtc": "2025-01-01T12:00:00Z"
+      }
+    }
+  ]
+}
+
+###
+
+POST {{ExpenseSync.Api_HostAddress}}/api/sync/process
+Content-Type: application/json
+
+{}
