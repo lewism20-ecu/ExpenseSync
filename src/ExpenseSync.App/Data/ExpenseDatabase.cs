@@ -32,6 +32,13 @@ public class ExpenseDatabase
             var connection = new SQLiteAsyncConnection(DatabasePath, DatabaseConstants.Flags, storeDateTimeAsTicks: false);
             await connection.CreateTableAsync<Expense>();
             await connection.CreateTableAsync<PendingChange>();
+            await connection.CreateTableAsync<SyncState>();
+            await connection.CreateTableAsync<IncomingChange>();
+            if (await connection.FindAsync<SyncState>(SyncState.SingletonId) is null)
+            {
+                await connection.InsertAsync(new SyncState());
+            }
+
             database = connection;
         }
         finally
@@ -186,6 +193,112 @@ public class ExpenseDatabase
     {
         await InitializeAsync();
         return await database!.Table<PendingChange>().CountAsync();
+    }
+
+    public async Task<DateTime?> GetLastSyncUtcAsync()
+    {
+        await InitializeAsync();
+        var state = await database!.Table<SyncState>()
+            .Where(s => s.Id == SyncState.SingletonId)
+            .FirstOrDefaultAsync();
+        return state?.LastSyncUtc is { } lastSyncUtc
+            ? DateTime.SpecifyKind(lastSyncUtc, DateTimeKind.Utc)
+            : null;
+    }
+
+    /// <summary>
+    /// Replaces any unprocessed batch with the latest pull response. This lets a failed apply retry
+    /// from the unchanged sync position without accumulating duplicate incoming rows.
+    /// </summary>
+    public async Task SaveIncomingChangesAsync(IEnumerable<IncomingChange> incomingChanges)
+    {
+        await InitializeAsync();
+        var changes = incomingChanges.ToList();
+
+        await database!.RunInTransactionAsync(conn =>
+        {
+            foreach (var unprocessed in conn.Table<IncomingChange>().Where(c => !c.IsProcessed).ToList())
+            {
+                conn.Delete(unprocessed);
+            }
+
+            foreach (var change in changes)
+            {
+                conn.Insert(change);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Applies the current incoming batch and advances the sync position in one transaction.
+    /// </summary>
+    public async Task ApplyIncomingChangesAsync(DateTime serverTimeUtc)
+    {
+        await InitializeAsync();
+        var utcServerTime = DateTime.SpecifyKind(serverTimeUtc, DateTimeKind.Utc);
+
+        await database!.RunInTransactionAsync(conn =>
+        {
+            var incomingChanges = conn.Table<IncomingChange>()
+                .Where(c => !c.IsProcessed)
+                .OrderBy(c => c.ServerUpdatedUtc)
+                .ToList();
+
+            foreach (var incoming in incomingChanges)
+            {
+                var pending = conn.Table<PendingChange>()
+                    .FirstOrDefault(p => p.ExpenseId == incoming.ExpenseId);
+                var expense = conn.Find<Expense>(incoming.ExpenseId);
+
+                if (pending is not null)
+                {
+                    incoming.Result = IncomingChangeResult.Skipped;
+                }
+                else if (incoming.IsDeleted)
+                {
+                    if (expense is not null)
+                    {
+                        expense.IsDeleted = true;
+                        expense.LastModifiedUtc = DateTime.SpecifyKind(incoming.LastModifiedUtc, DateTimeKind.Utc);
+                        conn.Update(expense);
+                    }
+
+                    incoming.Result = IncomingChangeResult.Deleted;
+                }
+                else
+                {
+                    var receivedExpense = new Expense
+                    {
+                        ExpenseId = incoming.ExpenseId,
+                        Description = incoming.Description,
+                        Amount = incoming.Amount,
+                        ExpenseDate = incoming.ExpenseDate.Date,
+                        LastModifiedUtc = DateTime.SpecifyKind(incoming.LastModifiedUtc, DateTimeKind.Utc),
+                        IsDeleted = false
+                    };
+
+                    if (expense is null)
+                    {
+                        conn.Insert(receivedExpense);
+                        incoming.Result = IncomingChangeResult.Inserted;
+                    }
+                    else
+                    {
+                        receivedExpense.IsDeleted = false;
+                        conn.Update(receivedExpense);
+                        incoming.Result = IncomingChangeResult.Updated;
+                    }
+                }
+
+                incoming.IsProcessed = true;
+                incoming.ProcessedAtUtc = DateTime.UtcNow;
+                conn.Update(incoming);
+            }
+
+            var state = conn.Find<SyncState>(SyncState.SingletonId) ?? new SyncState();
+            state.LastSyncUtc = utcServerTime;
+            conn.InsertOrReplace(state);
+        });
     }
 
     private static PendingChange? FindPendingChange(SQLiteConnection conn, Guid expenseId) =>
