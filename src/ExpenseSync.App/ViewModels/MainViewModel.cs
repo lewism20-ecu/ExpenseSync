@@ -71,7 +71,7 @@ public partial class MainViewModel : ObservableObject
         SyncStatus = "Syncing...";
         try
         {
-            var result = await syncService.PushAsync();
+            var result = await syncService.SyncAsync();
             SyncStatus = result.Message;
             await LoadExpensesAsync();
         }

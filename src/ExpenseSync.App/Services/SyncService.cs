@@ -1,17 +1,20 @@
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ExpenseSync.App.Data;
 using ExpenseSync.App.Models;
+using SQLite;
 
 namespace ExpenseSync.App.Services;
 
 public record SyncResult(bool Success, int SentCount, string Message);
+public record PullResult(bool Success, int ReceivedCount, DateTime? ServerTimeUtc, string Message);
 
-/// <summary>Pushes pending local changes to the API (POST /api/sync/push).</summary>
+/// <summary>Pushes local changes and pulls server changes through the sync API.</summary>
 public class SyncService
 {
-    public const string PushPath = "api/sync/push";
+    public const string PushPath = "pushChanges";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -25,6 +28,102 @@ public class SyncService
     {
         this.httpClient = httpClient;
         this.database = database;
+    }
+
+    public async Task<SyncResult> SyncAsync(CancellationToken cancellationToken = default)
+    {
+        var push = await PushAsync(cancellationToken);
+        if (!push.Success)
+        {
+            return push;
+        }
+
+        var pull = await PullAsync(cancellationToken);
+        if (!pull.Success || pull.ServerTimeUtc is null)
+        {
+            return new SyncResult(
+                false,
+                push.SentCount,
+                $"Sent {push.SentCount} change(s), but pull failed. {pull.Message}");
+        }
+
+        try
+        {
+            await database.ApplyIncomingChangesAsync(pull.ServerTimeUtc.Value);
+        }
+        catch (SQLiteException ex)
+        {
+            return new SyncResult(
+                false,
+                push.SentCount,
+                $"Sent {push.SentCount} change(s), received {pull.ReceivedCount}, but downloaded changes could not be applied: {ex.Message} The previous sync position was kept.");
+        }
+
+        return new SyncResult(
+            true,
+            push.SentCount,
+            $"Sent {push.SentCount}, received {pull.ReceivedCount} change(s).");
+    }
+
+    public async Task<PullResult> PullAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var lastSyncUtc = await database.GetLastSyncUtcAsync();
+            var requestPath = "changes";
+            if (lastSyncUtc is { } since)
+            {
+                var utcSince = DateTime.SpecifyKind(since, DateTimeKind.Utc);
+                var sinceValue = Uri.EscapeDataString(utcSince.ToString("O", CultureInfo.InvariantCulture));
+                requestPath = $"{requestPath}?since={sinceValue}";
+            }
+
+            var result = await httpClient.GetFromJsonAsync<PullResponse>(requestPath, JsonOptions, cancellationToken);
+            if (result?.Changes is null || result.ServerTimeUtc == default)
+            {
+                throw new JsonException("The server returned an incomplete pull response.");
+            }
+
+            var receivedAtUtc = DateTime.UtcNow;
+            var incomingChanges = result.Changes.Select(change => new IncomingChange
+            {
+                ExpenseId = change.ExpenseId,
+                Description = change.Description,
+                Amount = change.Amount,
+                ExpenseDate = change.ExpenseDate.ToDateTime(TimeOnly.MinValue),
+                LastModifiedUtc = DateTime.SpecifyKind(change.LastModifiedUtc, DateTimeKind.Utc),
+                IsDeleted = change.IsDeleted,
+                LastDeviceId = change.LastDeviceId,
+                ServerUpdatedUtc = DateTime.SpecifyKind(change.ServerUpdatedUtc, DateTimeKind.Utc),
+                ReceivedAtUtc = receivedAtUtc,
+                IsProcessed = false,
+                ProcessedAtUtc = null,
+                Result = null
+            }).ToList();
+
+            await database.SaveIncomingChangesAsync(incomingChanges);
+            return new PullResult(
+                true,
+                incomingChanges.Count,
+                DateTime.SpecifyKind(result.ServerTimeUtc, DateTimeKind.Utc),
+                $"Received {incomingChanges.Count} change(s).");
+        }
+        catch (HttpRequestException ex)
+        {
+            return new PullResult(false, 0, null, $"Pull failed: {ex.Message} The previous sync position was kept.");
+        }
+        catch (TaskCanceledException)
+        {
+            return new PullResult(false, 0, null, "Pull failed: the request timed out. The previous sync position was kept.");
+        }
+        catch (JsonException)
+        {
+            return new PullResult(false, 0, null, "Pull failed: unexpected response from the server. The previous sync position was kept.");
+        }
+        catch (SQLiteException ex)
+        {
+            return new PullResult(false, 0, null, $"Pull failed: could not save downloaded changes: {ex.Message} The previous sync position was kept.");
+        }
     }
 
     public async Task<SyncResult> PushAsync(CancellationToken cancellationToken = default)
@@ -106,4 +205,16 @@ public class SyncService
     private record PushExpense(string Description, decimal Amount, DateOnly ExpenseDate, DateTime LastModifiedUtc);
 
     private record PushResponse(List<Guid> AcceptedPendingChangeIds, DateTime? ServerTimeUtc);
+
+    private record PullResponse(List<PullExpense>? Changes, DateTime ServerTimeUtc);
+
+    private record PullExpense(
+        Guid ExpenseId,
+        string Description,
+        decimal Amount,
+        DateOnly ExpenseDate,
+        DateTime LastModifiedUtc,
+        bool IsDeleted,
+        string LastDeviceId,
+        DateTime ServerUpdatedUtc);
 }
