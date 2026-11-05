@@ -10,6 +10,51 @@ Accept: application/json
 
 ###
 
+GET {{ExpenseSync.Api_HostAddress}}/changes
+Accept: application/json
+
+###
+
+GET {{ExpenseSync.Api_HostAddress}}/changes?since=2025-01-01T00:00:00Z
+Accept: application/json
+
+###
+
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-02",
+  "changes": [
+    {
+      "pendingChangeId": "22222222-2222-2222-2222-222222222222",
+      "expenseId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "operation": "Create",
+      "capturedAtUtc": "2025-01-02T09:00:00Z",
+      "expense": {
+        "description": "Hotel",
+        "amount": 125.50,
+        "expenseDate": "2025-01-02",
+        "lastModifiedUtc": "2025-01-02T09:00:00Z"
+      }
+    },
+    {
+      "pendingChangeId": "33333333-3333-3333-3333-333333333333",
+      "expenseId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "operation": "Update",
+      "capturedAtUtc": "2025-01-02T09:05:00Z",
+      "expense": {
+        "description": "Client lunch - updated",
+        "amount": 49.25,
+        "expenseDate": "2025-01-01",
+        "lastModifiedUtc": "2025-01-02T09:05:00Z"
+      }
+    }
+  ]
+}
+
+###
+
 POST {{ExpenseSync.Api_HostAddress}}/api/sync/push
 Content-Type: application/json
 

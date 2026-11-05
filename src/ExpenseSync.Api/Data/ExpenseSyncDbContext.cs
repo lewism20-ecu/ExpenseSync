@@ -26,6 +26,9 @@ public class ExpenseSyncDbContext(DbContextOptions<ExpenseSyncDbContext> options
 
             expense.Property(e => e.LastModifiedUtc)
                 .IsRequired();
+
+            expense.Property(e => e.ServerUpdatedUtc)
+                .IsRequired();
         });
 
         modelBuilder.Entity<ReceivedChange>(change =>

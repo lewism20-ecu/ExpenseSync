@@ -19,4 +19,6 @@ public class Expense
     public bool IsDeleted { get; set; }
 
     public string LastDeviceId { get; set; } = string.Empty;
+
+    public DateTime ServerUpdatedUtc { get; set; }
 }
