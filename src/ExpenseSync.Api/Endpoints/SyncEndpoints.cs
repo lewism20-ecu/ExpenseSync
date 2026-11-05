@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 using ExpenseSync.Api.Data;
 using ExpenseSync.Api.Models;
@@ -14,7 +15,8 @@ public static class SyncEndpoints
             .WithName("PullChanges")
             .WithSummary("Get server-side expense changes since a timestamp")
             .WithDescription("Returns all expense changes that were written after the requested UTC time, including tombstones.")
-            .Produces<PullResponse>(StatusCodes.Status200OK);
+            .Produces<PullResponse>(StatusCodes.Status200OK)
+            .ProducesValidationProblem();
 
         routes.MapGet("/api/sync/changes", PullAsync)
             .WithName("PullChangesAlias")
@@ -43,13 +45,30 @@ public static class SyncEndpoints
 
     private static async Task<IResult> PullAsync(ExpenseSyncDbContext db, [AsParameters] PullRequest request, CancellationToken cancellationToken)
     {
-        var sinceUtc = request.SinceUtc is { } since
-            ? DateTime.SpecifyKind(since, DateTimeKind.Utc)
-            : DateTime.MinValue.ToUniversalTime();
+        DateTime? sinceUtc = null;
+        if (request.Since is { } since)
+        {
+            if (!DateTimeOffset.TryParseExact(
+                    since,
+                    ["yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'"],
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var parsedSince))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["since"] = ["The since value must be an ISO 8601 UTC timestamp."]
+                });
+            }
+
+            sinceUtc = parsedSince.UtcDateTime;
+        }
+
+        var serverTimeUtc = DateTime.UtcNow;
 
         var changes = await db.Expenses
             .AsNoTracking()
-            .Where(e => e.ServerUpdatedUtc > sinceUtc)
+            .Where(e => sinceUtc == null || e.ServerUpdatedUtc > sinceUtc.Value)
             .OrderBy(e => e.ServerUpdatedUtc)
             .Select(e => new PullExpense(
                 e.ExpenseId,
@@ -62,7 +81,7 @@ public static class SyncEndpoints
                 e.ServerUpdatedUtc))
             .ToListAsync(cancellationToken);
 
-        return Results.Ok(new PullResponse(changes, DateTime.UtcNow));
+        return Results.Ok(new PullResponse(changes, serverTimeUtc));
     }
 
     private static async Task<IResult> PushAsync(ExpenseSyncDbContext db, PushRequest request, CancellationToken cancellationToken)
@@ -254,7 +273,7 @@ public static class SyncEndpoints
     }
 
     public sealed record PullRequest(
-        [property: FromQuery(Name = "since")] DateTime? SinceUtc);
+        [property: FromQuery(Name = "since")] string? Since);
 
     public sealed record PullResponse(
         List<PullExpense> Changes,
