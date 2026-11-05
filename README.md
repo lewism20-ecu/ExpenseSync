@@ -1,6 +1,6 @@
 ﻿# ExpenseSync
 
-ExpenseSync is a mobile expense reporting app for employees who need to log expenses while away from a reliable network connection. The .NET MAUI app stores expenses in a local SQLite database on the device. Changes made offline are queued on the device and pushed to a central ASP.NET Core API (which has its own SQLite database) when the user taps Sync now. Pulling other users' changes back down comes in later weeks.
+ExpenseSync is a mobile expense reporting app for employees who need to log expenses while away from a reliable network connection. The .NET MAUI app stores expenses in a local SQLite database on the device. Changes made offline are queued locally; Sync now pushes them to a central ASP.NET Core API and then downloads and applies server changes.
 
 ## Week 1 Progress: Planning & Setup
 
@@ -52,7 +52,7 @@ ExpenseSync/
 
 ## Week 2 Progress: Local CRUD + Change Tracking
 
-This week the app went from "opens a database" to a working expense list that can add, edit, and delete records on the device, with every change recorded in a `PendingChanges` table for later sync. Nothing talks to the API yet.
+The home page now lists expenses and supports local create, edit, and delete. Each change is recorded in `PendingChanges` for later sync. The app does not contact the API yet.
 
 ### Create, update, delete
 
@@ -180,7 +180,7 @@ Parking is gone from the list, but its row is still in `Expenses` with `IsDelete
 
 ## Week 3 Progress: Push Sync
 
-This week the device started sending its pending changes to the API. Tapping Sync now posts every `PendingChanges` row to `POST /api/sync/push`. The server saves them in a `ReceivedChanges` inbox and replies with the IDs it accepted, and the device deletes only those pending rows. A second endpoint, `POST /api/sync/process`, applies the inbox to the server's `Expenses` table.
+Sync now posts each `PendingChanges` row to `POST /api/sync/push`. The server saves the changes in `ReceivedChanges` and returns the IDs it accepted. The device deletes only those pending rows. `POST /api/sync/process` applies the inbox to the server's `Expenses` table.
 
 ### Push endpoint
 
@@ -344,8 +344,142 @@ App:
 
 ### Not done yet
 
-- Pulling server changes down to the device (Week 4).
 - Conflict handling in process (Week 5). Each run applies changes in `CapturedAtUtc` order, but it does not compare against the `LastModifiedUtc` already on the server, so an older change processed in a later run can overwrite a newer one.
-- `/api/sync/process` is called by hand, and sync only runs when the user taps Sync now.
-- The base URL is hardcoded. A Dev Tunnel URL is needed for testing on a physical phone.
+- `/api/sync/process` is still called by hand; only the push/pull sync is started by Sync now.
+- Automatic sync on connectivity changes is not implemented.
+- A Dev Tunnel URL is still needed for testing on a physical phone.
 - No audit log (Week 5).
+
+## Week 4 Progress: Pull Sync
+
+The app now runs a push followed by a pull when the user taps Sync now. The server exposes `GET /changes?since=<UTC timestamp>` and returns expense rows ordered by `ServerUpdatedUtc`, including delete tombstones. The cursor is read on the server before the query; the app stores the returned `serverTimeUtc` only after it applies the complete downloaded batch.
+
+### Submission checklist
+
+- [x] Pull endpoint (`GET /changes`)
+- [x] Apply incoming creates and updates on the device
+- [x] Apply deletes as tombstones and hide them from the expense list
+- [x] Application name and description at the top of this README
+- [x] Week 1, Week 2, Week 3, and Week 4 progress documentation
+- [x] All five required database screenshots, with captions below
+
+### Pull response
+
+`since` is optional for the first pull. When provided, it must be an ISO 8601 UTC timestamp ending in `Z`. Invalid values return a `400` validation problem. The server filters by `ServerUpdatedUtc`, rather than the device-captured `LastModifiedUtc`, so changes uploaded late are still discoverable.
+
+```json
+{
+  "changes": [
+    {
+      "expenseId": "8bcf3d32-c624-4372-a0f0-2154b9233445",
+      "description": "Client lunch",
+      "amount": 48.75,
+      "expenseDate": "2026-10-28",
+      "lastModifiedUtc": "2026-10-29T03:25:11.270Z",
+      "isDeleted": false,
+      "lastDeviceId": "device-02",
+      "serverUpdatedUtc": "2026-11-03T18:05:42.120Z"
+    }
+  ],
+  "serverTimeUtc": "2026-11-03T18:10:00.000Z"
+}
+```
+
+### Device pull and apply flow
+
+```text
+Sync now
+   |
+   |-- push PendingChanges to POST /pushChanges
+   |      '-- remove only server-acknowledged rows
+   |
+   |-- read SyncState.LastSyncUtc
+   |-- GET /changes?since=LastSyncUtc
+   |-- save response rows to IncomingChanges (unprocessed)
+   |-- apply rows in ServerUpdatedUtc order
+   |      |-- skip an expense that still has a PendingChanges row
+   |      |-- insert a new expense
+   |      |-- update an existing expense
+   |      '-- apply a delete as an IsDeleted tombstone
+   '-- mark incoming rows processed and advance LastSyncUtc in one transaction
+```
+
+Pulled changes do not create `PendingChanges`. If pull or apply fails, the previous `LastSyncUtc` is retained. The app displays one combined sent/received status after the sync and refreshes the expense list and pending count. `POST /api/sync/push` remains available as an alias, and `/api/sync/process` is still a manual server-side step.
+
+Device IDs are selected by target: Android builds use `device-02`; other platforms use `device-01`. The Android base URL remains the emulator address (`http://10.0.2.2:5157/`). The evidence below uses the actual Windows MAUI app as the receiving device (`device-01`) and API requests labeled `device-02` to represent changes from another device. It does not claim a physical Android or Dev Tunnel test.
+
+### Week 4 evidence
+
+These are images of actual SQLite query output, in the same table-dump style as Weeks 2 and 3. The server ran with a separate test database. The device tables came from the Windows app's own `expensesync.db3`, backed up before testing. GUIDs are shown in lower case so they can be matched between server and device.
+
+The original device database was restored from its backup after the test. The screenshots show the test data, not the current database contents.
+
+#### Test sequence
+
+1. Start the API with a fresh test database. Prepare a backed-up device database with no expenses, pending changes, or previous sync cursor.
+2. Push two `Create` changes as `device-02`: Client lunch ($42.50) and Parking ($18.00). Call `POST /api/sync/process`.
+3. In the Windows app, tap Sync now. It downloads both expenses and stores its first cursor. The two processed incoming rows are retained as history.
+4. As `device-02`, push Hotel - conference night ($189.00) as `Create`, Client lunch ($48.75) as `Update`, and Parking as `Delete`. Call `/api/sync/process` again.
+5. Capture the server and device tables before the second device pull.
+6. Tap Sync now on Windows. Pause after `PullAsync` has stored the three received rows, before `ApplyIncomingChangesAsync`, and capture the staged incoming batch.
+7. Resume processing. Capture the device tables, then the unchanged server tables.
+
+A temporary Debug-only pause was used for step 6 and removed afterward. The final app was rebuilt and retested without that pause. The normal Sync now action always runs push, pull, and apply together.
+
+#### 1. Server tables before the device pulls
+
+![Server before pull: lunch 48.75, new Hotel 189.00, Parking tombstone, and five processed receipt rows](docs/images/week4-db-01-server-before.png)
+
+The server already has Hotel, Client lunch at $48.75, and Parking with `IsDeleted = 1`. All three `ServerUpdatedUtc` values are later than the device's previous cursor (`03:09:06.643 UTC`). `ReceivedChanges` contains the two initial creates plus the create/update/delete batch, all processed.
+
+#### 2. Device tables before data is pulled
+
+![Device before pull: lunch still 42.50, Parking visible, Hotel absent, no pending changes, old cursor](docs/images/week4-db-02-device-before.png)
+
+Client lunch is the existing record that will be updated: it is still $42.50 locally. Hotel is the new server record and is not on the device yet. Parking is still undeleted. There are no pending changes. The two incoming rows shown are already-processed history from the initial download, not the next batch.
+
+#### 3. Device tables after data is pulled, before processing
+
+![Device after download: three new unprocessed incoming rows; expenses and cursor unchanged](docs/images/week4-db-03-device-after-pull.png)
+
+Three additional `IncomingChanges` rows contain Hotel ($189.00), lunch ($48.75), and the Parking tombstone. They have `IsProcessed = 0`, no `ProcessedAtUtc`, and no `Result`. The local `Expenses` table and `LastSyncUtc` have not changed yet. Downloading alone creates no `PendingChanges`.
+
+#### 4. Device tables after data is processed
+
+![Device after processing: Hotel inserted, lunch updated, Parking tombstoned, incoming results set, pending empty, cursor advanced](docs/images/week4-db-04-device-after-process.png)
+
+Hotel is inserted, lunch is $48.75, and Parking has `IsDeleted = 1`. The three new incoming rows have results `Inserted`, `Updated`, and `Deleted`, with processing timestamps. `PendingChanges` is still empty. `LastSyncUtc` has advanced from `03:09:06.643` to `03:09:53.193 UTC`, the server cursor returned for this pull. DevFlow also confirmed that the UI displayed only lunch and Hotel, with "Sent 0, received 3 change(s)."
+
+#### 5. Server tables after successful download
+
+![Server after download: identical Expenses and ReceivedChanges contents to the before-pull snapshot](docs/images/week4-db-05-server-after.png)
+
+The server rows match screenshot 1. Pull is read-only: it does not delete expenses or alter receipt/processing flags. A comparison of the complete SQLite dumps before and after the device pull found no differences.
+
+### Other testing and files
+
+Verified on Windows with the real app, API, and SQLite files:
+
+- Initial pull inserted both baseline expenses without creating outbound pending changes.
+- Incremental pull downloaded exactly the new expense, update, and delete. Processing updated all three correctly and hid Parking from the UI.
+- An intentional SQLite trigger failure during the second of two updates rolled back the entire apply transaction. Neither expense changed, both incoming rows stayed unprocessed, and `LastSyncUtc` stayed unchanged. Removing the trigger and retrying applied both updates without duplicating the failed batch.
+- Editing lunch through the UI after download but before apply created a real pending edit. Apply marked the incoming lunch version `Skipped`, kept the local $60.00 edit, and retained its pending row. This is the Week 4 pending-change protection rule, not Week 5 conflict resolution.
+- With the API stopped, push kept the pending edit and displayed a failure. Restarting the API and syncing with the final, uninstrumented build sent it successfully.
+- With no pending edits and the API stopped, pull left `LastSyncUtc` unchanged and did not generate pending changes.
+- Three valid UTC cursor formats (whole seconds, milliseconds, and seven fractional digits) returned `200`. Six invalid cases (date only, natural-language date, malformed text, non-UTC offset, missing zone, and empty value) returned `400`.
+- All 24 assertions against the captured database snapshots passed. An exact replay with the final build reproduced the same expense values and tombstones without the temporary pause.
+- A repeated sync after that replay downloaded no further changes and created no duplicate incoming or pending rows. The pull response's exact JSON field names, empty-batch response, and validation-problem error shape were also checked.
+- Existing server data initially had default `ServerUpdatedUtc` values. A follow-up EF migration backfills those from `LastModifiedUtc`; a filtered pull after migration returned the expected Parking tombstone.
+- API, Windows MAUI, and Android target builds passed with zero warnings and zero errors. Runtime evidence is from Windows; Android was compile-checked, not run.
+
+Files:
+
+- App: `DeviceSettings.cs` selects the Week 4 device IDs; `SyncSettings.cs` still contains the localhost/emulator URLs; `SyncService.cs`, `ExpenseDatabase.cs`, `SyncState.cs`, and `IncomingChange.cs` implement the push/pull/apply flow.
+- API: `Endpoints/SyncEndpoints.cs` provides the pull endpoint, push alias, and processing endpoint; `Models/Expense.cs` and the EF migrations track/backfill `ServerUpdatedUtc`; `ExpenseSync.Api.http` contains pull and push samples.
+- Evidence: `docs/images/week4-db-01-server-before.png` through `week4-db-05-server-after.png`.
+
+### Not done yet
+
+- Last-captured-on-device conflict resolution and the append-only audit log (Week 5).
+- Automatic synchronization when connectivity returns.
+- Physical-device Dev Tunnel configuration and verification.
