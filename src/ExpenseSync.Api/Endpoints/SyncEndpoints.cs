@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using ExpenseSync.Api.Data;
 using ExpenseSync.Api.Models;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace ExpenseSync.Api.Endpoints;
@@ -9,13 +10,27 @@ public static class SyncEndpoints
 {
     public static IEndpointRouteBuilder MapSyncEndpoints(this IEndpointRouteBuilder routes)
     {
-        routes.MapPost("/api/sync/push", PushAsync)
+        routes.MapGet("/changes", PullAsync)
+            .WithName("PullChanges")
+            .WithSummary("Get server-side expense changes since a timestamp")
+            .WithDescription("Returns all expense changes that were written after the requested UTC time, including tombstones.")
+            .Produces<PullResponse>(StatusCodes.Status200OK);
+
+        routes.MapGet("/api/sync/changes", PullAsync)
+            .WithName("PullChangesAlias")
+            .ExcludeFromDescription();
+
+        routes.MapPost("/pushChanges", PushAsync)
             .WithName("PushChanges")
             .WithSummary("Accept pending device changes")
             .WithDescription("Stores a device's pending changes for later processing on the server.")
             .Accepts<PushRequest>("application/json")
             .Produces<PushResponse>(StatusCodes.Status200OK)
             .ProducesValidationProblem();
+
+        routes.MapPost("/api/sync/push", PushAsync)
+            .WithName("PushChangesAlias")
+            .ExcludeFromDescription();
 
         routes.MapPost("/api/sync/process", ProcessAsync)
             .WithName("ProcessPendingChanges")
@@ -24,6 +39,30 @@ public static class SyncEndpoints
             .Produces<ProcessResponse>(StatusCodes.Status200OK);
 
         return routes;
+    }
+
+    private static async Task<IResult> PullAsync(ExpenseSyncDbContext db, [AsParameters] PullRequest request, CancellationToken cancellationToken)
+    {
+        var sinceUtc = request.SinceUtc is { } since
+            ? DateTime.SpecifyKind(since, DateTimeKind.Utc)
+            : DateTime.MinValue.ToUniversalTime();
+
+        var changes = await db.Expenses
+            .AsNoTracking()
+            .Where(e => e.ServerUpdatedUtc > sinceUtc)
+            .OrderBy(e => e.ServerUpdatedUtc)
+            .Select(e => new PullExpense(
+                e.ExpenseId,
+                e.Description,
+                e.Amount,
+                e.ExpenseDate,
+                e.LastModifiedUtc,
+                e.IsDeleted,
+                e.LastDeviceId,
+                e.ServerUpdatedUtc))
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(new PullResponse(changes, DateTime.UtcNow));
     }
 
     private static async Task<IResult> PushAsync(ExpenseSyncDbContext db, PushRequest request, CancellationToken cancellationToken)
@@ -151,7 +190,8 @@ public static class SyncEndpoints
                             ExpenseDate = change.ExpenseDate,
                             LastModifiedUtc = change.LastModifiedUtc,
                             IsDeleted = false,
-                            LastDeviceId = change.DeviceId
+                            LastDeviceId = change.DeviceId,
+                            ServerUpdatedUtc = DateTime.UtcNow
                         });
                     }
                     else
@@ -162,6 +202,7 @@ public static class SyncEndpoints
                         expense.LastModifiedUtc = change.LastModifiedUtc;
                         expense.IsDeleted = false;
                         expense.LastDeviceId = change.DeviceId;
+                        expense.ServerUpdatedUtc = DateTime.UtcNow;
                     }
                     break;
 
@@ -176,7 +217,8 @@ public static class SyncEndpoints
                             ExpenseDate = change.ExpenseDate,
                             LastModifiedUtc = change.LastModifiedUtc,
                             IsDeleted = false,
-                            LastDeviceId = change.DeviceId
+                            LastDeviceId = change.DeviceId,
+                            ServerUpdatedUtc = DateTime.UtcNow
                         });
                     }
                     else
@@ -187,6 +229,7 @@ public static class SyncEndpoints
                         expense.LastModifiedUtc = change.LastModifiedUtc;
                         expense.IsDeleted = false;
                         expense.LastDeviceId = change.DeviceId;
+                        expense.ServerUpdatedUtc = DateTime.UtcNow;
                     }
                     break;
 
@@ -196,6 +239,7 @@ public static class SyncEndpoints
                         expense.IsDeleted = true;
                         expense.LastModifiedUtc = change.CapturedAtUtc;
                         expense.LastDeviceId = change.DeviceId;
+                        expense.ServerUpdatedUtc = DateTime.UtcNow;
                     }
                     break;
             }
@@ -208,6 +252,23 @@ public static class SyncEndpoints
 
         return Results.Ok(new ProcessResponse(queuedChanges.Count, DateTimeOffset.UtcNow));
     }
+
+    public sealed record PullRequest(
+        [property: FromQuery(Name = "since")] DateTime? SinceUtc);
+
+    public sealed record PullResponse(
+        List<PullExpense> Changes,
+        DateTime ServerTimeUtc);
+
+    public sealed record PullExpense(
+        Guid ExpenseId,
+        string Description,
+        decimal Amount,
+        DateOnly ExpenseDate,
+        DateTime LastModifiedUtc,
+        bool IsDeleted,
+        string LastDeviceId,
+        DateTime ServerUpdatedUtc);
 
     public sealed record PushRequest(
         string DeviceId,
