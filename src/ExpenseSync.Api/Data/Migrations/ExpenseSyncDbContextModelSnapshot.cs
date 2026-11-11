@@ -15,12 +15,50 @@ partial class ExpenseSyncDbContextModelSnapshot : ModelSnapshot
     // If you encounter a merge conflict in the line below, it means you need to
     // discard one of the migration branches and recreate its migrations on top of
     // the other branch. See https://aka.ms/efcore-docs-migrations-conflicts for more info.
-    public override string LastMigrationId => "20261105025940_BackfillServerUpdatedUtc";
+    public override string LastMigrationId => "20261111223202_AddWeek5ConflictAndAudit";
 
     protected override void BuildModel(ModelBuilder modelBuilder)
     {
 #pragma warning disable 612, 618
         modelBuilder.HasAnnotation("ProductVersion", "11.0.0-preview.7.26381.103");
+
+        modelBuilder.Entity("ExpenseSync.Api.Models.AuditEntry", b =>
+            {
+                b.Property<Guid>("AuditEntryId")
+                    .HasColumnType("TEXT");
+
+                b.Property<string>("Details")
+                    .IsRequired()
+                    .HasColumnType("TEXT");
+
+                b.Property<string>("DeviceId")
+                    .IsRequired()
+                    .HasMaxLength(100)
+                    .HasColumnType("TEXT");
+
+                b.Property<Guid>("ExpenseId")
+                    .HasColumnType("TEXT");
+
+                b.Property<DateTime>("OccurredAtUtc")
+                    .HasColumnType("TEXT");
+
+                b.Property<string>("Operation")
+                    .IsRequired()
+                    .HasMaxLength(10)
+                    .HasColumnType("TEXT");
+
+                b.Property<DateTime>("ReceivedAtUtc")
+                    .HasColumnType("TEXT");
+
+                b.Property<string>("UserId")
+                    .IsRequired()
+                    .HasMaxLength(100)
+                    .HasColumnType("TEXT");
+
+                b.HasKey("AuditEntryId");
+
+                b.ToTable("AuditEntries");
+            });
 
         modelBuilder.Entity("ExpenseSync.Api.Models.Expense", b =>
             {
@@ -96,6 +134,12 @@ partial class ExpenseSyncDbContextModelSnapshot : ModelSnapshot
                     .HasColumnType("TEXT");
 
                 b.Property<DateTime?>("ProcessedAtUtc")
+                    .HasColumnType("TEXT");
+
+                b.Property<string>("Result")
+                    .HasColumnType("TEXT");
+
+                b.Property<DateTime?>("ServerLastModifiedUtc")
                     .HasColumnType("TEXT");
 
                 b.HasKey("PendingChangeId");

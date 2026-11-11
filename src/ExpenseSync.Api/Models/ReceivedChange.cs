@@ -23,6 +23,10 @@ public class ReceivedChange
 
     public DateTime LastModifiedUtc { get; set; }
 
+    public string? Result { get; set; }
+
+    public DateTime? ServerLastModifiedUtc { get; set; }
+
     public bool IsProcessed { get; set; }
 
     public DateTime? ProcessedAtUtc { get; set; }

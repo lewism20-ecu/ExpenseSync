@@ -82,3 +82,219 @@ POST {{ExpenseSync.Api_HostAddress}}/api/sync/process
 Content-Type: application/json
 
 {}
+
+### Seed Client lunch for the stale-second conflict pair
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-02",
+  "changes": [
+    {
+      "pendingChangeId": "a1000000-0000-0000-0000-000000000001",
+      "expenseId": "a1000000-0000-0000-0000-000000000002",
+      "operation": "Create",
+      "capturedAtUtc": "2026-11-10T13:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 48.75,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T13:00:00Z"
+      }
+    }
+  ]
+}
+
+### Newer change arrives first (Applied)
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-02",
+  "changes": [
+    {
+      "pendingChangeId": "a1000000-0000-0000-0000-000000000003",
+      "expenseId": "a1000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "capturedAtUtc": "2026-11-10T15:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 55.00,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T15:00:00Z"
+      }
+    }
+  ]
+}
+
+### Older change arrives second (RejectedOlder)
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-01",
+  "changes": [
+    {
+      "pendingChangeId": "a1000000-0000-0000-0000-000000000004",
+      "expenseId": "a1000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "capturedAtUtc": "2026-11-10T14:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 60.00,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T14:00:00Z"
+      }
+    }
+  ]
+}
+
+### Seed Client lunch for the reverse-order conflict pair
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-02",
+  "changes": [
+    {
+      "pendingChangeId": "a2000000-0000-0000-0000-000000000001",
+      "expenseId": "a2000000-0000-0000-0000-000000000002",
+      "operation": "Create",
+      "capturedAtUtc": "2026-11-10T13:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 48.75,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T13:00:00Z"
+      }
+    }
+  ]
+}
+
+### Older change arrives first (Applied)
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-01",
+  "changes": [
+    {
+      "pendingChangeId": "a2000000-0000-0000-0000-000000000003",
+      "expenseId": "a2000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "capturedAtUtc": "2026-11-10T14:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 60.00,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T14:00:00Z"
+      }
+    }
+  ]
+}
+
+### Newer change arrives second (Applied)
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-02",
+  "changes": [
+    {
+      "pendingChangeId": "a2000000-0000-0000-0000-000000000004",
+      "expenseId": "a2000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "capturedAtUtc": "2026-11-10T15:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 55.00,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T15:00:00Z"
+      }
+    }
+  ]
+}
+
+### Equal timestamp loses to the server's existing version (RejectedOlder)
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-01",
+  "changes": [
+    {
+      "pendingChangeId": "a2000000-0000-0000-0000-000000000005",
+      "expenseId": "a2000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "capturedAtUtc": "2026-11-10T15:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 99.00,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T15:00:00Z"
+      }
+    }
+  ]
+}
+
+### Audit-only push
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-02",
+  "changes": [],
+  "auditEntries": [
+    {
+      "auditEntryId": "d1000000-0000-0000-0000-000000000001",
+      "expenseId": "a1000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "occurredAtUtc": "2026-11-10T15:00:00Z",
+      "deviceId": "device-02",
+      "userId": "user-02",
+      "details": "Amount 48.75 -> 55.00"
+    }
+  ]
+}
+
+### Retry the older PendingChangeId (acknowledged, not reprocessed)
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-01",
+  "changes": [
+    {
+      "pendingChangeId": "a1000000-0000-0000-0000-000000000004",
+      "expenseId": "a1000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "capturedAtUtc": "2026-11-10T14:00:00Z",
+      "expense": {
+        "description": "Client lunch",
+        "amount": 60.00,
+        "expenseDate": "2026-11-10",
+        "lastModifiedUtc": "2026-11-10T14:00:00Z"
+      }
+    }
+  ]
+}
+
+### Retry the same audit entry (accepted, but not inserted again)
+POST {{ExpenseSync.Api_HostAddress}}/pushChanges
+Content-Type: application/json
+
+{
+  "deviceId": "device-02",
+  "changes": [],
+  "auditEntries": [
+    {
+      "auditEntryId": "d1000000-0000-0000-0000-000000000001",
+      "expenseId": "a1000000-0000-0000-0000-000000000002",
+      "operation": "Update",
+      "occurredAtUtc": "2026-11-10T15:00:00Z",
+      "deviceId": "device-02",
+      "userId": "user-02",
+      "details": "Amount 48.75 -> 55.00"
+    }
+  ]
+}
