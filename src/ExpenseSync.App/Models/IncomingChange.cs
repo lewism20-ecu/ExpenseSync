@@ -41,5 +41,6 @@ public static class IncomingChangeResult
     public const string Inserted = "Inserted";
     public const string Updated = "Updated";
     public const string Deleted = "Deleted";
-    public const string Skipped = "Skipped";
+    public const string ConflictServerWins = "ConflictServerWins";
+    public const string ConflictLocalWins = "ConflictLocalWins";
 }

@@ -37,6 +37,9 @@ public partial class MainViewModel : ObservableObject
     public partial int PendingChangeCount { get; set; }
 
     [ObservableProperty]
+    public partial int AuditEntryCount { get; set; }
+
+    [ObservableProperty]
     public partial string SyncStatus { get; set; } = string.Empty;
 
     [ObservableProperty]
@@ -55,6 +58,7 @@ public partial class MainViewModel : ObservableObject
             }
 
             PendingChangeCount = await database.GetPendingChangeCountAsync();
+            AuditEntryCount = await database.GetAuditEntryCountAsync();
             DatabaseStatus = "Ready";
         }
         catch (SQLiteException ex)

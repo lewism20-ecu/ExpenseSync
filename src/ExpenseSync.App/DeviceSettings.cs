@@ -8,4 +8,11 @@ public static class DeviceSettings
 #else
         "device-01";
 #endif
+
+    public const string UserId =
+#if ANDROID
+        "user-02";
+#else
+        "user-01";
+#endif
 }
