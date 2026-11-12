@@ -1,3 +1,4 @@
+using System.Globalization;
 using ExpenseSync.App.Models;
 using SQLite;
 
@@ -32,6 +33,7 @@ public class ExpenseDatabase
             var connection = new SQLiteAsyncConnection(DatabasePath, DatabaseConstants.Flags, storeDateTimeAsTicks: false);
             await connection.CreateTableAsync<Expense>();
             await connection.CreateTableAsync<PendingChange>();
+            await connection.CreateTableAsync<AuditEntry>();
             await connection.CreateTableAsync<SyncState>();
             await connection.CreateTableAsync<IncomingChange>();
             if (await connection.FindAsync<SyncState>(SyncState.SingletonId) is null)
@@ -78,6 +80,11 @@ public class ExpenseDatabase
         {
             conn.Insert(expense);
             conn.Insert(NewPendingChange(expense.ExpenseId, ChangeOperation.Create, now));
+            conn.Insert(NewAuditEntry(
+                expense.ExpenseId,
+                ChangeOperation.Create,
+                now,
+                $"Created \"{expense.Description}\" {FormatAmount(expense.Amount)}"));
         });
     }
 
@@ -90,6 +97,7 @@ public class ExpenseDatabase
 
         await database!.RunInTransactionAsync(conn =>
         {
+            var previous = conn.Find<Expense>(expense.ExpenseId);
             conn.Update(expense);
 
             var pending = FindPendingChange(conn, expense.ExpenseId);
@@ -103,6 +111,12 @@ public class ExpenseDatabase
                 // Either way the server only needs the latest version of the row.
                 ReplacePendingChange(conn, pending, pending.Operation, now);
             }
+
+            conn.Insert(NewAuditEntry(
+                expense.ExpenseId,
+                ChangeOperation.Update,
+                now,
+                BuildUpdateDetails(previous, expense)));
         });
     }
 
@@ -121,6 +135,11 @@ public class ExpenseDatabase
                 // The server never saw this expense, so there is nothing to sync.
                 conn.Delete(pending);
                 conn.Delete(expense);
+                conn.Insert(NewAuditEntry(
+                    expense.ExpenseId,
+                    ChangeOperation.Delete,
+                    now,
+                    $"Deleted \"{expense.Description}\""));
                 return;
             }
 
@@ -136,6 +155,12 @@ public class ExpenseDatabase
             {
                 ReplacePendingChange(conn, pending, ChangeOperation.Delete, now);
             }
+
+            conn.Insert(NewAuditEntry(
+                expense.ExpenseId,
+                ChangeOperation.Delete,
+                now,
+                $"Deleted \"{expense.Description}\""));
         });
     }
 
@@ -195,6 +220,44 @@ public class ExpenseDatabase
         return await database!.Table<PendingChange>().CountAsync();
     }
 
+    public async Task<List<AuditEntry>> GetUnsyncedAuditEntriesAsync()
+    {
+        await InitializeAsync();
+        return await database!.Table<AuditEntry>()
+            .Where(a => !a.IsSynced)
+            .OrderBy(a => a.OccurredAtUtc)
+            .ToListAsync();
+    }
+
+    public async Task<int> GetAuditEntryCountAsync()
+    {
+        await InitializeAsync();
+        return await database!.Table<AuditEntry>().CountAsync();
+    }
+
+    public async Task MarkAuditEntriesSyncedAsync(IEnumerable<Guid> acceptedIds)
+    {
+        await InitializeAsync();
+        var ids = acceptedIds.ToHashSet();
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        var syncedAtUtc = DateTime.UtcNow;
+        await database!.RunInTransactionAsync(conn =>
+        {
+            foreach (var entry in conn.Table<AuditEntry>()
+                         .ToList()
+                         .Where(a => ids.Contains(a.AuditEntryId) && !a.IsSynced))
+            {
+                entry.IsSynced = true;
+                entry.SyncedAtUtc = syncedAtUtc;
+                conn.Update(entry);
+            }
+        });
+    }
+
     public async Task<DateTime?> GetLastSyncUtcAsync()
     {
         await InitializeAsync();
@@ -249,44 +312,61 @@ public class ExpenseDatabase
                 var pending = conn.Table<PendingChange>()
                     .FirstOrDefault(p => p.ExpenseId == incoming.ExpenseId);
                 var expense = conn.Find<Expense>(incoming.ExpenseId);
+                var hasPendingChange = pending is not null;
+                var incomingLastModifiedUtc = DateTime.SpecifyKind(incoming.LastModifiedUtc, DateTimeKind.Utc);
+                var serverWinsConflict = hasPendingChange
+                    && (expense is null || incomingLastModifiedUtc >= DateTime.SpecifyKind(expense.LastModifiedUtc, DateTimeKind.Utc));
 
-                if (pending is not null)
+                if (hasPendingChange && !serverWinsConflict)
                 {
-                    incoming.Result = IncomingChangeResult.Skipped;
-                }
-                else if (incoming.IsDeleted)
-                {
-                    if (expense is not null)
-                    {
-                        expense.IsDeleted = true;
-                        expense.LastModifiedUtc = DateTime.SpecifyKind(incoming.LastModifiedUtc, DateTimeKind.Utc);
-                        conn.Update(expense);
-                    }
-
-                    incoming.Result = IncomingChangeResult.Deleted;
+                    incoming.Result = IncomingChangeResult.ConflictLocalWins;
                 }
                 else
                 {
-                    var receivedExpense = new Expense
+                    if (serverWinsConflict)
                     {
-                        ExpenseId = incoming.ExpenseId,
-                        Description = incoming.Description,
-                        Amount = incoming.Amount,
-                        ExpenseDate = incoming.ExpenseDate.Date,
-                        LastModifiedUtc = DateTime.SpecifyKind(incoming.LastModifiedUtc, DateTimeKind.Utc),
-                        IsDeleted = false
-                    };
+                        conn.Delete(pending!);
+                    }
 
-                    if (expense is null)
+                    if (incoming.IsDeleted)
                     {
-                        conn.Insert(receivedExpense);
-                        incoming.Result = IncomingChangeResult.Inserted;
+                        if (expense is not null)
+                        {
+                            expense.IsDeleted = true;
+                            expense.LastModifiedUtc = incomingLastModifiedUtc;
+                            conn.Update(expense);
+                        }
+
+                        incoming.Result = hasPendingChange
+                            ? IncomingChangeResult.ConflictServerWins
+                            : IncomingChangeResult.Deleted;
                     }
                     else
                     {
-                        receivedExpense.IsDeleted = false;
-                        conn.Update(receivedExpense);
-                        incoming.Result = IncomingChangeResult.Updated;
+                        var receivedExpense = new Expense
+                        {
+                            ExpenseId = incoming.ExpenseId,
+                            Description = incoming.Description,
+                            Amount = incoming.Amount,
+                            ExpenseDate = incoming.ExpenseDate.Date,
+                            LastModifiedUtc = incomingLastModifiedUtc,
+                            IsDeleted = false
+                        };
+
+                        if (expense is null)
+                        {
+                            conn.Insert(receivedExpense);
+                            incoming.Result = hasPendingChange
+                                ? IncomingChangeResult.ConflictServerWins
+                                : IncomingChangeResult.Inserted;
+                        }
+                        else
+                        {
+                            conn.Update(receivedExpense);
+                            incoming.Result = hasPendingChange
+                                ? IncomingChangeResult.ConflictServerWins
+                                : IncomingChangeResult.Updated;
+                        }
                     }
                 }
 
@@ -321,4 +401,46 @@ public class ExpenseDatabase
             CapturedAtUtc = capturedAtUtc,
             DeviceId = DeviceSettings.DeviceId
         };
+
+    private static AuditEntry NewAuditEntry(Guid expenseId, ChangeOperation operation, DateTime occurredAtUtc, string details) =>
+        new()
+        {
+            ExpenseId = expenseId,
+            Operation = operation,
+            OccurredAtUtc = occurredAtUtc,
+            DeviceId = DeviceSettings.DeviceId,
+            UserId = DeviceSettings.UserId,
+            Details = details,
+            IsSynced = false
+        };
+
+    private static string BuildUpdateDetails(Expense? previous, Expense updated)
+    {
+        if (previous is null)
+        {
+            return $"Updated \"{updated.Description}\"";
+        }
+
+        var changes = new List<string>();
+        if (previous.Amount != updated.Amount)
+        {
+            changes.Add($"Amount {FormatAmount(previous.Amount)} -> {FormatAmount(updated.Amount)}");
+        }
+
+        if (!string.Equals(previous.Description, updated.Description, StringComparison.Ordinal))
+        {
+            changes.Add($"Description \"{previous.Description}\" -> \"{updated.Description}\"");
+        }
+
+        if (previous.ExpenseDate.Date != updated.ExpenseDate.Date)
+        {
+            changes.Add($"Date {previous.ExpenseDate:yyyy-MM-dd} -> {updated.ExpenseDate:yyyy-MM-dd}");
+        }
+
+        return changes.Count == 0
+            ? $"Updated \"{updated.Description}\""
+            : string.Join("; ", changes);
+    }
+
+    private static string FormatAmount(decimal amount) => amount.ToString("0.00", CultureInfo.InvariantCulture);
 }

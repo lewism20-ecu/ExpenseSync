@@ -8,7 +8,7 @@ using SQLite;
 
 namespace ExpenseSync.App.Services;
 
-public record SyncResult(bool Success, int SentCount, string Message);
+public record SyncResult(bool Success, int SentCount, string Message, int RejectedCount = 0);
 public record PullResult(bool Success, int ReceivedCount, DateTime? ServerTimeUtc, string Message);
 
 /// <summary>Pushes local changes and pulls server changes through the sync API.</summary>
@@ -59,10 +59,14 @@ public class SyncService
                 $"Sent {push.SentCount} change(s), received {pull.ReceivedCount}, but downloaded changes could not be applied: {ex.Message} The previous sync position was kept.");
         }
 
+        var rejectedSummary = push.RejectedCount > 0
+            ? $" ({push.RejectedCount} rejected: newer version on server)"
+            : string.Empty;
         return new SyncResult(
             true,
             push.SentCount,
-            $"Sent {push.SentCount}, received {pull.ReceivedCount} change(s).");
+            $"Sent {push.SentCount}{rejectedSummary}, received {pull.ReceivedCount} change(s).",
+            push.RejectedCount);
     }
 
     public async Task<PullResult> PullAsync(CancellationToken cancellationToken = default)
@@ -131,7 +135,8 @@ public class SyncService
         try
         {
             var pending = await database.GetPendingChangesAsync();
-            if (pending.Count == 0)
+            var unsyncedAuditEntries = await database.GetUnsyncedAuditEntriesAsync();
+            if (pending.Count == 0 && unsyncedAuditEntries.Count == 0)
             {
                 return new SyncResult(true, 0, "Nothing to sync.");
             }
@@ -164,7 +169,18 @@ public class SyncService
                     payload));
             }
 
-            var request = new PushRequest(DeviceSettings.DeviceId, changes);
+            var auditEntries = unsyncedAuditEntries
+                .Select(entry => new PushAuditEntry(
+                    entry.AuditEntryId,
+                    entry.ExpenseId,
+                    entry.Operation,
+                    DateTime.SpecifyKind(entry.OccurredAtUtc, DateTimeKind.Utc),
+                    entry.DeviceId,
+                    entry.UserId,
+                    entry.Details))
+                .ToList();
+
+            var request = new PushRequest(DeviceSettings.DeviceId, changes, auditEntries);
             using var response = await httpClient.PostAsJsonAsync(PushPath, request, JsonOptions, cancellationToken);
             response.EnsureSuccessStatusCode();
 
@@ -172,28 +188,38 @@ public class SyncService
             var accepted = (result?.AcceptedPendingChangeIds ?? [])
                 .Where(id => pending.Any(p => p.PendingChangeId == id))
                 .ToList();
+            var acceptedAuditEntries = (result?.AcceptedAuditEntryIds ?? [])
+                .Where(id => unsyncedAuditEntries.Any(a => a.AuditEntryId == id))
+                .ToList();
+            var rejectedCount = (result?.Results ?? [])
+                .Count(changeResult => string.Equals(changeResult.Result, "RejectedOlder", StringComparison.Ordinal));
 
             await database.ClearPendingChangesAsync(accepted);
+            await database.MarkAuditEntriesSyncedAsync(acceptedAuditEntries);
 
-            return accepted.Count == pending.Count
-                ? new SyncResult(true, accepted.Count, $"Synced {accepted.Count} change(s).")
-                : new SyncResult(false, accepted.Count, $"Server accepted {accepted.Count} of {pending.Count} change(s). The rest stay pending.");
+            return accepted.Count == pending.Count && acceptedAuditEntries.Count == unsyncedAuditEntries.Count
+                ? new SyncResult(true, accepted.Count, $"Synced {accepted.Count} change(s).", rejectedCount)
+                : new SyncResult(
+                    false,
+                    accepted.Count,
+                    $"Server accepted {accepted.Count}/{pending.Count} change(s) and {acceptedAuditEntries.Count}/{unsyncedAuditEntries.Count} audit entry(ies). Unaccepted items stay queued.",
+                    rejectedCount);
         }
         catch (HttpRequestException ex)
         {
-            return new SyncResult(false, 0, $"Sync failed: {ex.Message} Pending changes were kept.");
+            return new SyncResult(false, 0, $"Sync failed: {ex.Message} Pending changes and audit entries were kept.");
         }
         catch (TaskCanceledException)
         {
-            return new SyncResult(false, 0, "Sync failed: the request timed out. Pending changes were kept.");
+            return new SyncResult(false, 0, "Sync failed: the request timed out. Pending changes and audit entries were kept.");
         }
         catch (JsonException)
         {
-            return new SyncResult(false, 0, "Sync failed: unexpected response from the server. Pending changes were kept.");
+            return new SyncResult(false, 0, "Sync failed: unexpected response from the server. Pending changes and audit entries were kept.");
         }
     }
 
-    private record PushRequest(string DeviceId, List<PushChange> Changes);
+    private record PushRequest(string DeviceId, List<PushChange> Changes, List<PushAuditEntry> AuditEntries);
 
     private record PushChange(
         Guid PendingChangeId,
@@ -204,7 +230,24 @@ public class SyncService
 
     private record PushExpense(string Description, decimal Amount, DateOnly ExpenseDate, DateTime LastModifiedUtc);
 
-    private record PushResponse(List<Guid> AcceptedPendingChangeIds, DateTime? ServerTimeUtc);
+    private record PushAuditEntry(
+        Guid AuditEntryId,
+        Guid ExpenseId,
+        ChangeOperation Operation,
+        DateTime OccurredAtUtc,
+        string DeviceId,
+        string UserId,
+        string Details);
+
+    private sealed record PushResponse
+    {
+        public List<Guid> AcceptedPendingChangeIds { get; init; } = [];
+        public List<Guid> AcceptedAuditEntryIds { get; init; } = [];
+        public List<PushChangeResult> Results { get; init; } = [];
+        public DateTime? ServerTimeUtc { get; init; }
+    }
+
+    private record PushChangeResult(Guid PendingChangeId, Guid ExpenseId, string Result);
 
     private record PullResponse(List<PullExpense>? Changes, DateTime ServerTimeUtc);
 
