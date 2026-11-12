@@ -3,4 +3,7 @@
     <Project Path="src/ExpenseSync.Api/ExpenseSync.Api.csproj" />
     <Project Path="src/ExpenseSync.App/ExpenseSync.App.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ExpenseSync.Tests/ExpenseSync.Tests.csproj" />
+  </Folder>
 </Solution>

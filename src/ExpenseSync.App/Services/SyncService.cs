@@ -8,7 +8,7 @@ using SQLite;
 
 namespace ExpenseSync.App.Services;
 
-public record SyncResult(bool Success, int SentCount, string Message, int RejectedCount = 0);
+public record SyncResult(bool Success, int SentCount, string Message, int RejectedCount = 0, int ReceivedCount = 0);
 public record PullResult(bool Success, int ReceivedCount, DateTime? ServerTimeUtc, string Message);
 
 /// <summary>Pushes local changes and pulls server changes through the sync API.</summary>
@@ -38,13 +38,17 @@ public class SyncService
             return push;
         }
 
+        var rejectedSummary = push.RejectedCount > 0
+            ? $" ({push.RejectedCount} rejected: server version is newer or equal)"
+            : string.Empty;
         var pull = await PullAsync(cancellationToken);
         if (!pull.Success || pull.ServerTimeUtc is null)
         {
             return new SyncResult(
                 false,
                 push.SentCount,
-                $"Sent {push.SentCount} change(s), but pull failed. {pull.Message}");
+                $"Sent {push.SentCount}{rejectedSummary} change(s), but pull failed. {pull.Message}",
+                push.RejectedCount);
         }
 
         try
@@ -56,17 +60,17 @@ public class SyncService
             return new SyncResult(
                 false,
                 push.SentCount,
-                $"Sent {push.SentCount} change(s), received {pull.ReceivedCount}, but downloaded changes could not be applied: {ex.Message} The previous sync position was kept.");
+                $"Sent {push.SentCount}{rejectedSummary} change(s), received {pull.ReceivedCount}, but downloaded changes could not be applied: {ex.Message} The previous sync position was kept.",
+                push.RejectedCount,
+                ReceivedCount: pull.ReceivedCount);
         }
 
-        var rejectedSummary = push.RejectedCount > 0
-            ? $" ({push.RejectedCount} rejected: newer version on server)"
-            : string.Empty;
         return new SyncResult(
             true,
             push.SentCount,
             $"Sent {push.SentCount}{rejectedSummary}, received {pull.ReceivedCount} change(s).",
-            push.RejectedCount);
+            push.RejectedCount,
+            pull.ReceivedCount);
     }
 
     public async Task<PullResult> PullAsync(CancellationToken cancellationToken = default)
@@ -134,7 +138,8 @@ public class SyncService
     {
         try
         {
-            var pending = await database.GetPendingChangesAsync();
+            var snapshots = await database.GetPendingChangesForPushAsync();
+            var pending = snapshots.Select(snapshot => snapshot.Change).ToList();
             var unsyncedAuditEntries = await database.GetUnsyncedAuditEntriesAsync();
             if (pending.Count == 0 && unsyncedAuditEntries.Count == 0)
             {
@@ -142,16 +147,14 @@ public class SyncService
             }
 
             var changes = new List<PushChange>();
-            foreach (var change in pending)
+            foreach (var snapshot in snapshots)
             {
+                var change = snapshot.Change;
                 PushExpense? payload = null;
                 if (change.Operation != ChangeOperation.Delete)
                 {
-                    var expense = await database.GetExpenseIncludingDeletedAsync(change.ExpenseId);
-                    if (expense is null)
-                    {
-                        continue;
-                    }
+                    var expense = snapshot.Expense
+                        ?? throw new InvalidDataException($"Pending change {change.PendingChangeId} has no active expense.");
 
                     // sqlite-net stores decimal as REAL, so round off binary floating-point noise.
                     payload = new PushExpense(
@@ -216,6 +219,14 @@ public class SyncService
         catch (JsonException)
         {
             return new SyncResult(false, 0, "Sync failed: unexpected response from the server. Pending changes and audit entries were kept.");
+        }
+        catch (InvalidDataException ex)
+        {
+            return new SyncResult(false, 0, $"Sync failed: {ex.Message} Pending changes and audit entries were kept.");
+        }
+        catch (SQLiteException ex)
+        {
+            return new SyncResult(false, 0, $"Sync failed: could not access the local database: {ex.Message}");
         }
     }
 

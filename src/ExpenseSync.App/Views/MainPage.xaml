@@ -39,7 +39,7 @@
             Padding="16"
             StrokeShape="RoundRectangle 8"
             BackgroundColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource OffBlack}}">
-            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
                 <Label
                     Text="Local database"
                     FontFamily="OpenSansSemibold"
@@ -85,6 +85,18 @@
                     Text="{Binding AuditEntryCount}"
                     FontFamily="OpenSansSemibold"
                     FontSize="14" />
+                <Label
+                    Grid.Row="5"
+                    Grid.ColumnSpan="2"
+                    AutomationId="NetworkStatusLabel"
+                    Text="{Binding NetworkStatus}"
+                    FontSize="14" />
+                <Label
+                    Grid.Row="6"
+                    Grid.ColumnSpan="2"
+                    AutomationId="LastSyncAttemptLabel"
+                    Text="{Binding LastSyncAttempt}"
+                    FontSize="13" />
             </Grid>
         </Border>
 

@@ -9,6 +9,8 @@ namespace ExpenseSync.Api.Endpoints;
 
 public static class SyncEndpoints
 {
+    private static readonly SemaphoreSlim SyncGate = new(1, 1);
+
     public static IEndpointRouteBuilder MapSyncEndpoints(this IEndpointRouteBuilder routes)
     {
         routes.MapGet("/changes", PullAsync)
@@ -43,7 +45,10 @@ public static class SyncEndpoints
         return routes;
     }
 
-    private static async Task<IResult> PullAsync(ExpenseSyncDbContext db, [AsParameters] PullRequest request, CancellationToken cancellationToken)
+    private static Task<IResult> PullAsync(ExpenseSyncDbContext db, [AsParameters] PullRequest request, CancellationToken cancellationToken) =>
+        RunSerializedAsync(() => PullCoreAsync(db, request, cancellationToken), cancellationToken);
+
+    private static async Task<IResult> PullCoreAsync(ExpenseSyncDbContext db, PullRequest request, CancellationToken cancellationToken)
     {
         DateTime? sinceUtc = null;
         if (request.Since is { } since)
@@ -84,7 +89,10 @@ public static class SyncEndpoints
         return Results.Ok(new PullResponse(changes, serverTimeUtc));
     }
 
-    private static async Task<IResult> PushAsync(ExpenseSyncDbContext db, PushRequest request, CancellationToken cancellationToken)
+    private static Task<IResult> PushAsync(ExpenseSyncDbContext db, PushRequest request, CancellationToken cancellationToken) =>
+        RunSerializedAsync(() => PushCoreAsync(db, request, cancellationToken), cancellationToken);
+
+    private static async Task<IResult> PushCoreAsync(ExpenseSyncDbContext db, PushRequest request, CancellationToken cancellationToken)
     {
         if (request.DeviceId is not { Length: > 0 })
         {
@@ -277,7 +285,10 @@ public static class SyncEndpoints
             DateTimeOffset.UtcNow));
     }
 
-    private static async Task<IResult> ProcessAsync(ExpenseSyncDbContext db, CancellationToken cancellationToken)
+    private static Task<IResult> ProcessAsync(ExpenseSyncDbContext db, CancellationToken cancellationToken) =>
+        RunSerializedAsync(() => ProcessCoreAsync(db, cancellationToken), cancellationToken);
+
+    private static async Task<IResult> ProcessCoreAsync(ExpenseSyncDbContext db, CancellationToken cancellationToken)
     {
         var processedChanges = await ProcessPendingChangesAsync(db, cancellationToken);
 
@@ -296,8 +307,8 @@ public static class SyncEndpoints
         var processedChanges = new List<ProcessedChange>(queuedChanges.Count);
         foreach (var change in queuedChanges)
         {
-            var expense = await db.Expenses
-                .FirstOrDefaultAsync(e => e.ExpenseId == change.ExpenseId, cancellationToken);
+            var expense = db.Expenses.Local.FirstOrDefault(e => e.ExpenseId == change.ExpenseId)
+                ?? await db.Expenses.FirstOrDefaultAsync(e => e.ExpenseId == change.ExpenseId, cancellationToken);
             var incomingLastModifiedUtc = change.Operation == ChangeOperation.Delete
                 ? change.CapturedAtUtc
                 : change.LastModifiedUtc;
@@ -307,20 +318,18 @@ public static class SyncEndpoints
 
             if (expense is null)
             {
-                if (change.Operation != ChangeOperation.Delete)
+                // A delete can arrive before an older, delayed create.
+                db.Expenses.Add(new Expense
                 {
-                    db.Expenses.Add(new Expense
-                    {
-                        ExpenseId = change.ExpenseId,
-                        Description = change.Description,
-                        Amount = change.Amount,
-                        ExpenseDate = change.ExpenseDate,
-                        LastModifiedUtc = incomingLastModifiedUtc,
-                        IsDeleted = false,
-                        LastDeviceId = change.DeviceId,
-                        ServerUpdatedUtc = nowUtc
-                    });
-                }
+                    ExpenseId = change.ExpenseId,
+                    Description = change.Description,
+                    Amount = change.Amount,
+                    ExpenseDate = change.ExpenseDate,
+                    LastModifiedUtc = incomingLastModifiedUtc,
+                    IsDeleted = change.Operation == ChangeOperation.Delete,
+                    LastDeviceId = change.DeviceId,
+                    ServerUpdatedUtc = nowUtc
+                });
             }
             else if (incomingLastModifiedUtc <= expense.LastModifiedUtc)
             {
@@ -355,6 +364,20 @@ public static class SyncEndpoints
         await db.SaveChangesAsync(cancellationToken);
 
         return processedChanges;
+    }
+
+    // Keep conflict decisions and pull cursors consistent while multiple devices sync.
+    private static async Task<IResult> RunSerializedAsync(Func<Task<IResult>> operation, CancellationToken cancellationToken)
+    {
+        await SyncGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await operation();
+        }
+        finally
+        {
+            SyncGate.Release();
+        }
     }
 
     public sealed record PullRequest(

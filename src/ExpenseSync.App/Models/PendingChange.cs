@@ -21,4 +21,6 @@ public class PendingChange
 
     [NotNull, MaxLength(100)]
     public string DeviceId { get; set; } = string.Empty;
+
+    public bool PushAttempted { get; set; }
 }
