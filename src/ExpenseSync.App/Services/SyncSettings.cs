@@ -2,9 +2,12 @@ namespace ExpenseSync.App.Services;
 
 public static class SyncSettings
 {
-    // Change this to your API address. Android emulators reach the host machine at 10.0.2.2;
-    // physical devices need the host IP or a Dev Tunnel URL. The trailing slash is required.
+    // Set this to the shared HTTPS Dev Tunnel URL for both platforms; never include access tokens.
+    private const string? SharedDevTunnelUrl = null;
+
+    // Local defaults remain useful until the group has a tunnel. The trailing slash is required.
     public static string BaseUrl { get; set; } =
+        SharedDevTunnelUrl ??
 #if ANDROID
         "http://10.0.2.2:5157/";
 #else

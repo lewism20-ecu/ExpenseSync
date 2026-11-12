@@ -31,6 +31,8 @@ public static class MauiProgram
 			client.BaseAddress = new Uri(SyncSettings.BaseUrl);
 			client.Timeout = TimeSpan.FromSeconds(15);
 		});
+		builder.Services.AddSingleton(Connectivity.Current);
+		builder.Services.AddSingleton<SyncCoordinator>();
 
 		// Pages and view models
 		builder.Services.AddSingleton<MainViewModel>();

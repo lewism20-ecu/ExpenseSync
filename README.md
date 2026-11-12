@@ -1,6 +1,6 @@
 ﻿# ExpenseSync
 
-ExpenseSync is a mobile expense reporting app for employees who need to log expenses while away from a reliable network connection. The .NET MAUI app stores expenses in a local SQLite database on the device. Changes made offline are queued locally; Sync now pushes them to a central ASP.NET Core API and then downloads and applies server changes.
+ExpenseSync is a mobile expense reporting app for employees who need to log expenses while away from a reliable network connection. The .NET MAUI app stores expenses in a local SQLite database on the device. Changes made offline are queued locally; Sync now or a connectivity change can push them to a central ASP.NET Core API and then download and apply server changes.
 
 ## Week 1 Progress: Planning & Setup
 
@@ -180,7 +180,7 @@ Parking is gone from the list, but its row is still in `Expenses` with `IsDelete
 
 ## Week 3 Progress: Push Sync
 
-Sync now posts each `PendingChanges` row to `POST /api/sync/push`. The server saves the changes in `ReceivedChanges` and returns the IDs it accepted. The device deletes only those pending rows. `POST /api/sync/process` applies the inbox to the server's `Expenses` table.
+In Week 3, Sync now posted each `PendingChanges` row to `POST /api/sync/push`. The server saved the changes in `ReceivedChanges` and returned the IDs it accepted. The device deleted only those pending rows. `POST /api/sync/process` applied the inbox to the server's `Expenses` table. Week 5 changes the processing and response described below.
 
 ### Push endpoint
 
@@ -209,7 +209,7 @@ Sync now posts each `PendingChanges` row to `POST /api/sync/push`. The server sa
 Response: `{ "acceptedPendingChangeIds": [ ... ], "serverTimeUtc": "..." }`
 
 - `expense` is required for `Create` and `Update` and is `null` for `Delete`. A request that is missing `deviceId` or an expense payload gets a `400` validation problem.
-- Each change becomes one `ReceivedChanges` row with `IsProcessed = 0`. Push only stores the changes and does not touch `Expenses`.
+- In Week 3, each change became one `ReceivedChanges` row with `IsProcessed = 0`; push only stored the changes and did not touch `Expenses`.
 - If a `PendingChangeId` is already in `ReceivedChanges` (the device retried after losing the response), the server does not insert it again, but it still lists the ID as accepted so the device can clear it.
 
 ### Process endpoint
@@ -219,7 +219,7 @@ Response: `{ "acceptedPendingChangeIds": [ ... ], "serverTimeUtc": "..." }`
 - `Create`/`Update`: insert the expense, or overwrite it if it exists
 - `Delete`: set `IsDeleted = 1` (a tombstone, same as on the device)
 
-It then sets `IsProcessed = 1` and `ProcessedAtUtc` on each row. Because receiving and processing are separate steps, the server keeps a record of what each device sent. The conflict handling and audit log in later weeks will use that record. For now, process is called by hand (from `ExpenseSync.Api.http` or `curl`). Last-captured-wins conflict handling is not applied yet (Week 5).
+It then sets `IsProcessed = 1` and `ProcessedAtUtc` on each row. In Week 3, processing was called by hand and did not compare the incoming time with the server version. The Week 5 section describes automatic processing and conflict handling.
 
 ### Server tables
 
@@ -342,17 +342,13 @@ App:
 - `ViewModels/MainViewModel.cs`, `Views/MainPage.xaml`: Sync now button and status text
 - `MauiProgram.cs`, `ExpenseSync.App.csproj`: typed `HttpClient` registration (`Microsoft.Extensions.Http`)
 
-### Not done yet
+### Scope at the end of Week 3
 
-- Conflict handling in process (Week 5). Each run applies changes in `CapturedAtUtc` order, but it does not compare against the `LastModifiedUtc` already on the server, so an older change processed in a later run can overwrite a newer one.
-- `/api/sync/process` is still called by hand; only the push/pull sync is started by Sync now.
-- Automatic sync on connectivity changes is not implemented.
-- A Dev Tunnel URL is still needed for testing on a physical phone.
-- No audit log (Week 5).
+At the end of Week 3, conflict handling, automatic server processing, audit logs, connectivity-triggered sync, and the shared Dev Tunnel demo were still pending. The Week 5 section below documents their completion.
 
 ## Week 4 Progress: Pull Sync
 
-The app now runs a push followed by a pull when the user taps Sync now. The server exposes `GET /changes?since=<UTC timestamp>` and returns expense rows ordered by `ServerUpdatedUtc`, including delete tombstones. The cursor is read on the server before the query; the app stores the returned `serverTimeUtc` only after it applies the complete downloaded batch.
+In Week 4, the app ran a push followed by a pull when the user tapped Sync now. The server exposes `GET /changes?since=<UTC timestamp>` and returns expense rows ordered by `ServerUpdatedUtc`, including delete tombstones. The cursor is read on the server before the query; the app stores the returned `serverTimeUtc` only after it applies the complete downloaded batch.
 
 ### Submission checklist
 
@@ -404,7 +400,7 @@ Sync now
    '-- mark incoming rows processed and advance LastSyncUtc in one transaction
 ```
 
-Pulled changes do not create `PendingChanges`. If pull or apply fails, the previous `LastSyncUtc` is retained. The app displays one combined sent/received status after the sync and refreshes the expense list and pending count. `POST /api/sync/push` remains available as an alias, and `/api/sync/process` is still a manual server-side step.
+Pulled changes do not create `PendingChanges`. If pull or apply fails, the previous `LastSyncUtc` is retained. The app displays one combined sent/received status after the sync and refreshes the expense list and pending count. `POST /api/sync/push` remains available as an alias. In Week 5, push also processes the server inbox automatically and replaces the Week 4 `Skipped` rule.
 
 Device IDs are selected by target: Android builds use `device-02`; other platforms use `device-01`. The Android base URL remains the emulator address (`http://10.0.2.2:5157/`). The evidence below uses the actual Windows MAUI app as the receiving device (`device-01`) and API requests labeled `device-02` to represent changes from another device. It does not claim a physical Android or Dev Tunnel test.
 
@@ -480,6 +476,148 @@ Files:
 
 ### Not done yet
 
-- Last-captured-on-device conflict resolution and the append-only audit log (Week 5).
-- Automatic synchronization when connectivity returns.
-- Physical-device Dev Tunnel configuration and verification.
+Conflict resolution, audit logging, and connectivity-triggered sync are implemented in Week 5. A Windows-and-Android demo through a temporary Dev Tunnel verified the conflict strategy, audit trail, and offline/online automatic sync.
+
+## Week 5 Progress: Conflicts, Audit Log, Automatic Sync
+
+### Submission checklist
+
+- [x] Implement last-captured-on-device conflict handling.
+- [x] Record local audit entries and send them to the server.
+- [x] Use the same coordinator for Sync now and connectivity-triggered attempts.
+- [x] Document the Week 5 implementation and test procedure.
+- [x] Configure and verify a temporary Dev Tunnel from the PC, Windows, and Android for the demo.
+- [x] Capture the conflict, audit, and online/offline automatic-sync evidence below.
+- [x] Prepare the rendered README screenshot and zipped `.git` archive.
+- [ ] Upload the README screenshot and `.git` archive to Canvas.
+
+### Conflict handling and audit
+
+The server processes the inbox during `POST /pushChanges`. The separately callable `/api/sync/process` endpoint remains available. A device change is applied only when its captured `LastModifiedUtc` is later than the server's; a delete uses `CapturedAtUtc`. Equal timestamps keep the server version. `ReceivedChanges.Result` records `Applied` or `RejectedOlder`, and `ServerLastModifiedUtc` records the value used for the comparison. A rejected row is acknowledged, and the server refreshes the winning expense's `ServerUpdatedUtc` so the losing device can pull it.
+
+During pull, a pending local edit is retained when it is newer than the incoming version (`ConflictLocalWins`). An incoming version that is newer or equal is applied and the pending row is removed (`ConflictServerWins`). Pulls do not create pending changes or audit entries. The API serializes sync operations within its single process so simultaneous devices cannot overwrite a newer captured version with an older one.
+
+Each local create, update, and delete writes an `AuditEntries` row in the same SQLite transaction as the expense and pending change. Entries include the operation, UTC time, device ID, user ID, and a short description. Windows uses `device-01` / `user-01`; Android uses `device-02` / `user-02`. Audit rows stay on the device after synchronization; only `IsSynced` and `SyncedAtUtc` change. The server stores each audit ID once, including on retries.
+
+A create deleted before any push attempt is removed locally, but both audit events remain. Once a create has been attempted, its deletion stays queued as a tombstone: the server may have received the create even if its response was lost. Pending changes and their expense payloads are captured together before sending. Existing pending creates from older app versions are conservatively treated as possibly sent. Unlike the original Week 5 plan, the server also keeps a tombstone when a delete arrives before any server row; this prevents an older, delayed create from resurrecting the expense.
+
+### Push contract
+
+The request may contain changes, audit entries, or both. An empty request is rejected. Older clients may omit `auditEntries`.
+
+```json
+{
+  "deviceId": "device-01",
+  "changes": [{
+    "pendingChangeId": "11111111-1111-1111-1111-111111111111",
+    "expenseId": "22222222-2222-2222-2222-222222222222",
+    "operation": "Update",
+    "capturedAtUtc": "2026-11-10T15:02:10Z",
+    "expense": {
+      "description": "Client lunch",
+      "amount": 60.00,
+      "expenseDate": "2026-10-28",
+      "lastModifiedUtc": "2026-11-10T15:02:10Z"
+    }
+  }],
+  "auditEntries": [{
+    "auditEntryId": "33333333-3333-3333-3333-333333333333",
+    "expenseId": "22222222-2222-2222-2222-222222222222",
+    "operation": "Update",
+    "occurredAtUtc": "2026-11-10T15:02:10Z",
+    "deviceId": "device-01",
+    "userId": "user-01",
+    "details": "Amount 48.75 -> 60.00"
+  }]
+}
+```
+
+```json
+{
+  "acceptedPendingChangeIds": ["11111111-1111-1111-1111-111111111111"],
+  "acceptedAuditEntryIds": ["33333333-3333-3333-3333-333333333333"],
+  "results": [{
+    "pendingChangeId": "11111111-1111-1111-1111-111111111111",
+    "expenseId": "22222222-2222-2222-2222-222222222222",
+    "result": "Applied"
+  }],
+  "serverTimeUtc": "2026-11-10T15:05:00Z"
+}
+```
+
+Only acknowledged pending and audit IDs are cleared or marked synced. A failed request retains the unacknowledged work for retry.
+
+### Automatic sync
+
+```text
+Sync now (Manual) ----\
+                       -> SyncCoordinator -> online: push, pull, apply
+Connectivity (Auto) --/                   -> offline: keep pending work
+                                      -> record SyncAttempts and refresh UI
+```
+
+The singleton coordinator starts with the app and listens for changes to `NetworkAccess`. Duplicate events with the same access value are ignored. A semaphore prevents overlapping syncs: another manual request returns "Sync already running." If connectivity changes during a sync, the latest automatic trigger is retried after that sync finishes. An offline attempt never calls the API.
+
+`SyncAttempts` records the trigger, UTC start time, network access, success, sent and received counts, pending count afterward, and message. The main page shows the current network state and last attempt. The offline count reflects the moment the attempt ran; an edit made afterward does not rewrite that historical attempt. A pull can include the device's own just-uploaded expense, so its received count is not necessarily zero.
+
+### Shared API setup and test script
+
+For the captured demo, the API ran with a fresh SQLite database in the Windows temp directory and a temporary, anonymous HTTPS Dev Tunnel. The local and tunnel `/health` endpoints were checked, and both MAUI apps reached that same API. The URL was not committed; the temporary tunnel was stopped and removed after capture. To repeat the demo with the group server, set `SharedDevTunnelUrl` in `src/ExpenseSync.App/Services/SyncSettings.cs` to the group's HTTPS URL before building both apps. Do not put access tokens in source.
+
+The demo used synthetic expenses and the isolated server database `expensesync-week5-demo.db` under the Windows temp directory. The Android emulator app data was cleared with permission before testing. The PC network was left connected; only emulator connectivity was toggled.
+
+#### Captured two-device demo
+
+1. On Android (`device-02`), create Client lunch ($48.75) and Parking ($18.00), then tap Sync now.
+2. Change Client lunch to $55.00 on Android, then disconnect only the emulator. Its automatic offline attempt records one pending update.
+3. While Android is offline, sync Windows (`device-01`), change the same shared lunch expense to $60.00, and sync again.
+4. Reconnect Android without tapping Sync now. Its automatic attempt sends the older $55.00 update, the server records `RejectedOlder`, and Android pulls the later $60.00 version. The Windows and Android rows converge on $60.00 with empty pending queues.
+5. Capture the local Android audit table and the server audit table. Both include the conflicting edits and their device/user IDs.
+
+The Android offline evidence is an actual app screenshot and SQLite snapshot. The online screenshot shows the automatic attempt, the rejected older edit, the pulled $60.00 value, and zero pending changes. The Windows app was run against the same temporary tunnel; its local database contains the $60.00 edit and synced audit row.
+
+### Supplemental Android evidence
+
+These two supplemental SQLite dumps are from an earlier Android emulator test with a separate isolated local API. They are retained as additional evidence, distinct from the Dev Tunnel demo evidence below.
+
+![Android offline attempt retaining one pending create](docs/images/week5-db-android-offline.png)
+
+The offline automatic attempt recorded one pending create and an unsynced audit entry.
+
+![Android online attempt and corresponding server records](docs/images/week5-db-android-online.png)
+
+After reconnecting, the automatic attempt sent the create, cleared the pending queue, and synced the audit entry to the test server.
+
+### Week 5 demo evidence
+
+#### Conflict strategy
+
+| Before Android reconnects | After automatic conflict resolution |
+|---|---|
+| ![Android has $55 pending while Windows and server have the later $60 value](docs/images/week5-db-01-conflict-before.png) | ![Server rejects Android's older update and both devices converge on $60](docs/images/week5-db-02-conflict-after.png) |
+
+#### Audit trail
+
+| Android device audit log | Server audit log |
+|---|---|
+| ![Android SQLite audit entries and synced status](docs/images/week5-db-03-device-audit.png) | ![Server SQLite audit entries from both users](docs/images/week5-db-04-server-audit.png) |
+
+#### Automatic sync
+
+| Offline attempt | Online attempt after reconnect |
+|---|---|
+| ![Android offline status with one pending update and an automatic attempt](docs/images/week5-ui-01-auto-sync-offline.png) | ![Android online status after automatically rejecting the older edit and pulling $60](docs/images/week5-ui-02-auto-sync-online.png) |
+
+| Offline SQLite state | Online SQLite state |
+|---|---|
+| ![Offline SyncAttempts and retained pending update](docs/images/week5-db-05-auto-sync-offline.png) | ![Online SyncAttempt, empty pending queue, and server winner](docs/images/week5-db-06-auto-sync-online.png) |
+
+### Other testing and limitations
+
+Run `dotnet test tests\ExpenseSync.Tests\ExpenseSync.Tests.csproj` for isolated API and device-database tests covering conflict order and ties, concurrent pushes, audit retries, pull conflicts, in-flight deletion, a delete arriving before an older create, automatic offline/online attempts, failed-server retry, and overlapping syncs. These tests use synthetic data, a temporary local API, and simulated connectivity; they are not a substitute for the two-device screenshots.
+
+The demo's automatic network changes were verified in the running Android app through DevFlow and in its SQLite `SyncAttempts` table. The Windows app's local SQLite record and audit row were also checked. The screenshots above are from the temporary Dev Tunnel demo; the earlier supplemental Android screenshots use a different local API and test record. The demo expense and sync cursor remain in the emulator's app database; prepare a fresh database before using another server.
+
+The conflict rule assumes device clocks are reasonably accurate. Automatic sync runs only while the app process is running; there is no background job for a suspended or closed app. Connectivity reporting internet access does not guarantee that the API or tunnel is reachable. The server-side sync lock assumes one API process, as in the shared demo setup.
+
+Files: API `Endpoints/SyncEndpoints.cs` and the Week 5 migration; app `Data/ExpenseDatabase.cs`, `Models/SyncAttempt.cs`, `Models/PendingChange.cs`, `Services/SyncCoordinator.cs`, `Services/SyncService.cs`, `Services/SyncSettings.cs`, `ViewModels/MainViewModel.cs`, and `Views/MainPage.xaml`; tests in `tests/ExpenseSync.Tests`.

@@ -12,7 +12,12 @@ public class ExpenseDatabase
     private readonly SemaphoreSlim initLock = new(1, 1);
     private SQLiteAsyncConnection? database;
 
-    public string DatabasePath => DatabaseConstants.DatabasePath;
+    public ExpenseDatabase(string? databasePath = null)
+    {
+        DatabasePath = databasePath ?? DatabaseConstants.DatabasePath;
+    }
+
+    public string DatabasePath { get; }
 
     public async Task InitializeAsync()
     {
@@ -32,8 +37,20 @@ public class ExpenseDatabase
             // Store DateTime columns as readable ISO text instead of ticks so the tables are easy to inspect.
             var connection = new SQLiteAsyncConnection(DatabasePath, DatabaseConstants.Flags, storeDateTimeAsTicks: false);
             await connection.CreateTableAsync<Expense>();
-            await connection.CreateTableAsync<PendingChange>();
+            await connection.RunInTransactionAsync(conn =>
+            {
+                var columns = conn.GetTableInfo("PendingChanges");
+                var needsPushAttemptMigration = columns.Count > 0
+                    && columns.All(column => column.Name != nameof(PendingChange.PushAttempted));
+                conn.CreateTable<PendingChange>();
+                if (needsPushAttemptMigration)
+                {
+                    // Older pending creates may already have reached the server despite a lost response.
+                    conn.Execute("UPDATE PendingChanges SET PushAttempted = 1 WHERE Operation = ?", "Create");
+                }
+            });
             await connection.CreateTableAsync<AuditEntry>();
+            await connection.CreateTableAsync<SyncAttempt>();
             await connection.CreateTableAsync<SyncState>();
             await connection.CreateTableAsync<IncomingChange>();
             if (await connection.FindAsync<SyncState>(SyncState.SingletonId) is null)
@@ -130,9 +147,9 @@ public class ExpenseDatabase
         {
             var pending = FindPendingChange(conn, expense.ExpenseId);
 
-            if (pending?.Operation == ChangeOperation.Create)
+            if (pending is { Operation: ChangeOperation.Create, PushAttempted: false })
             {
-                // The server never saw this expense, so there is nothing to sync.
+                // This create has never been sent, so there is nothing to delete on the server.
                 conn.Delete(pending);
                 conn.Delete(expense);
                 conn.Insert(NewAuditEntry(
@@ -172,6 +189,33 @@ public class ExpenseDatabase
         return await database!.Table<PendingChange>()
             .OrderBy(p => p.CapturedAtUtc)
             .ToListAsync();
+    }
+
+    public async Task<List<(PendingChange Change, Expense? Expense)>> GetPendingChangesForPushAsync()
+    {
+        await InitializeAsync();
+        var snapshots = new List<(PendingChange Change, Expense? Expense)>();
+
+        await database!.RunInTransactionAsync(conn =>
+        {
+            var pendingChanges = conn.Table<PendingChange>().OrderBy(p => p.CapturedAtUtc).ToList();
+            foreach (var change in pendingChanges)
+            {
+                var expense = change.Operation == ChangeOperation.Delete
+                    ? null
+                    : conn.Find<Expense>(change.ExpenseId);
+                if (change.Operation != ChangeOperation.Delete && (expense is null || expense.IsDeleted))
+                {
+                    throw new InvalidDataException($"Pending change {change.PendingChangeId} has no active expense.");
+                }
+
+                change.PushAttempted = true;
+                conn.Update(change);
+                snapshots.Add((change, expense));
+            }
+        });
+
+        return snapshots;
     }
 
     /// <summary>Loads an expense row even if it is a tombstone.</summary>
@@ -233,6 +277,20 @@ public class ExpenseDatabase
     {
         await InitializeAsync();
         return await database!.Table<AuditEntry>().CountAsync();
+    }
+
+    public async Task AddSyncAttemptAsync(SyncAttempt attempt)
+    {
+        await InitializeAsync();
+        await database!.InsertAsync(attempt);
+    }
+
+    public async Task<SyncAttempt?> GetLastSyncAttemptAsync()
+    {
+        await InitializeAsync();
+        var attempts = await database!.QueryAsync<SyncAttempt>(
+            "SELECT * FROM SyncAttempts ORDER BY rowid DESC LIMIT 1");
+        return attempts.FirstOrDefault();
     }
 
     public async Task MarkAuditEntriesSyncedAsync(IEnumerable<Guid> acceptedIds)
@@ -390,7 +448,9 @@ public class ExpenseDatabase
     private static void ReplacePendingChange(SQLiteConnection conn, PendingChange pending, ChangeOperation operation, DateTime capturedAtUtc)
     {
         conn.Delete(pending);
-        conn.Insert(NewPendingChange(pending.ExpenseId, operation, capturedAtUtc));
+        var replacement = NewPendingChange(pending.ExpenseId, operation, capturedAtUtc);
+        replacement.PushAttempted = pending.PushAttempted;
+        conn.Insert(replacement);
     }
 
     private static PendingChange NewPendingChange(Guid expenseId, ChangeOperation operation, DateTime capturedAtUtc) =>
