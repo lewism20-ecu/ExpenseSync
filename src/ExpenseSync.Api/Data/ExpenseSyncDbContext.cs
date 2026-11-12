@@ -9,6 +9,8 @@ public class ExpenseSyncDbContext(DbContextOptions<ExpenseSyncDbContext> options
 
     public DbSet<ReceivedChange> ReceivedChanges => Set<ReceivedChange>();
 
+    public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Expense>(expense =>
@@ -50,6 +52,33 @@ public class ExpenseSyncDbContext(DbContextOptions<ExpenseSyncDbContext> options
 
             change.HasIndex(c => c.IsProcessed);
             change.HasIndex(c => new { c.IsProcessed, c.CapturedAtUtc });
+        });
+
+        modelBuilder.Entity<AuditEntry>(auditEntry =>
+        {
+            auditEntry.HasKey(a => a.AuditEntryId);
+            auditEntry.Property(a => a.AuditEntryId).ValueGeneratedNever();
+
+            auditEntry.Property(a => a.Operation)
+                .HasConversion<string>()
+                .HasMaxLength(10);
+
+            auditEntry.Property(a => a.DeviceId)
+                .IsRequired()
+                .HasMaxLength(100);
+
+            auditEntry.Property(a => a.UserId)
+                .IsRequired()
+                .HasMaxLength(100);
+
+            auditEntry.Property(a => a.Details)
+                .IsRequired();
+
+            auditEntry.Property(a => a.OccurredAtUtc)
+                .IsRequired();
+
+            auditEntry.Property(a => a.ReceivedAtUtc)
+                .IsRequired();
         });
     }
 }

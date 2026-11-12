@@ -25,7 +25,7 @@ public static class SyncEndpoints
         routes.MapPost("/pushChanges", PushAsync)
             .WithName("PushChanges")
             .WithSummary("Accept pending device changes")
-            .WithDescription("Stores a device's pending changes for later processing on the server.")
+            .WithDescription("Stores a device's pending changes and audit entries, then applies pending changes.")
             .Accepts<PushRequest>("application/json")
             .Produces<PushResponse>(StatusCodes.Status200OK)
             .ProducesValidationProblem();
@@ -37,7 +37,7 @@ public static class SyncEndpoints
         routes.MapPost("/api/sync/process", ProcessAsync)
             .WithName("ProcessPendingChanges")
             .WithSummary("Apply queued device changes")
-            .WithDescription("Applies unprocessed received changes to the central expense table in captured time order.")
+            .WithDescription("Applies unprocessed received changes in captured time order using last-captured-on-device-wins.")
             .Produces<ProcessResponse>(StatusCodes.Status200OK);
 
         return routes;
@@ -94,24 +94,34 @@ public static class SyncEndpoints
             });
         }
 
-        if (request.Changes is null || request.Changes.Count == 0)
+        var changes = request.Changes ?? [];
+        var auditEntries = request.AuditEntries ?? [];
+        if (changes.Count == 0 && auditEntries.Count == 0)
         {
             return Results.ValidationProblem(new Dictionary<string, string[]>
             {
-                [nameof(PushRequest.Changes)] = ["At least one change is required."]
+                [nameof(PushRequest.Changes)] = ["At least one change or audit entry is required."]
             });
         }
 
         var dedupedChanges = new List<PushChange>();
         var seenPendingIds = new HashSet<Guid>();
 
-        foreach (var change in request.Changes)
+        foreach (var change in changes)
         {
             if (change.PendingChangeId == Guid.Empty)
             {
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 {
                     [nameof(PushChange.PendingChangeId)] = ["Each change must include a valid pending change ID."]
+                });
+            }
+
+            if (!Enum.IsDefined(change.Operation))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    [nameof(PushChange.Operation)] = [$"Change {change.PendingChangeId} has an invalid operation."]
                 });
             }
 
@@ -131,27 +141,51 @@ public static class SyncEndpoints
             dedupedChanges.Add(change);
         }
 
-        if (dedupedChanges.Count == 0)
+        var dedupedAuditEntries = new List<PushAuditEntry>();
+        var seenAuditEntryIds = new HashSet<Guid>();
+        foreach (var auditEntry in auditEntries)
         {
-            return Results.Ok(new PushResponse([], DateTimeOffset.UtcNow));
+            if (auditEntry.AuditEntryId == Guid.Empty)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    [nameof(PushAuditEntry.AuditEntryId)] = ["Each audit entry must include a valid audit entry ID."]
+                });
+            }
+
+            if (!Enum.IsDefined(auditEntry.Operation))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    [nameof(PushAuditEntry.Operation)] = [$"Audit entry {auditEntry.AuditEntryId} has an invalid operation."]
+                });
+            }
+
+            if (seenAuditEntryIds.Add(auditEntry.AuditEntryId))
+            {
+                dedupedAuditEntries.Add(auditEntry);
+            }
         }
 
+        var acceptedPendingIds = new List<Guid>();
         var pendingIdSet = dedupedChanges.Select(c => c.PendingChangeId).ToHashSet();
-        var existingIds = await db.ReceivedChanges
-            .AsNoTracking()
-            .Where(c => pendingIdSet.Contains(c.PendingChangeId))
-            .Select(c => c.PendingChangeId)
-            .ToListAsync(cancellationToken);
+        var existingPendingIds = pendingIdSet.Count == 0
+            ? []
+            : await db.ReceivedChanges
+                .AsNoTracking()
+                .Where(c => pendingIdSet.Contains(c.PendingChangeId))
+                .Select(c => c.PendingChangeId)
+                .ToListAsync(cancellationToken);
+        var existingPendingIdSet = existingPendingIds.ToHashSet();
 
-        var accepted = new List<Guid>();
         var hasNewRows = false;
         foreach (var change in dedupedChanges)
         {
             // Already stored by an earlier attempt (e.g. the response was lost): acknowledge it
             // again so the device can clear it, but do not insert a duplicate row.
-            if (existingIds.Contains(change.PendingChangeId))
+            if (existingPendingIdSet.Contains(change.PendingChangeId))
             {
-                accepted.Add(change.PendingChangeId);
+                acceptedPendingIds.Add(change.PendingChangeId);
                 continue;
             }
 
@@ -172,7 +206,40 @@ public static class SyncEndpoints
             };
 
             db.ReceivedChanges.Add(record);
-            accepted.Add(change.PendingChangeId);
+            acceptedPendingIds.Add(change.PendingChangeId);
+            hasNewRows = true;
+        }
+
+        var acceptedAuditEntryIds = new List<Guid>();
+        var auditIdSet = dedupedAuditEntries.Select(a => a.AuditEntryId).ToHashSet();
+        var existingAuditIds = auditIdSet.Count == 0
+            ? []
+            : await db.AuditEntries
+                .AsNoTracking()
+                .Where(a => auditIdSet.Contains(a.AuditEntryId))
+                .Select(a => a.AuditEntryId)
+                .ToListAsync(cancellationToken);
+        var existingAuditIdSet = existingAuditIds.ToHashSet();
+
+        foreach (var auditEntry in dedupedAuditEntries)
+        {
+            acceptedAuditEntryIds.Add(auditEntry.AuditEntryId);
+            if (existingAuditIdSet.Contains(auditEntry.AuditEntryId))
+            {
+                continue;
+            }
+
+            db.AuditEntries.Add(new AuditEntry
+            {
+                AuditEntryId = auditEntry.AuditEntryId,
+                ExpenseId = auditEntry.ExpenseId,
+                Operation = auditEntry.Operation,
+                OccurredAtUtc = auditEntry.OccurredAtUtc,
+                DeviceId = auditEntry.DeviceId,
+                UserId = auditEntry.UserId,
+                Details = auditEntry.Details,
+                ReceivedAtUtc = DateTime.UtcNow
+            });
             hasNewRows = true;
         }
 
@@ -181,95 +248,113 @@ public static class SyncEndpoints
             await db.SaveChangesAsync(cancellationToken);
         }
 
-        return Results.Ok(new PushResponse(accepted, DateTimeOffset.UtcNow));
+        await ProcessPendingChangesAsync(db, cancellationToken);
+
+        var storedResults = acceptedPendingIds.Count == 0
+            ? []
+            : await db.ReceivedChanges
+                .AsNoTracking()
+                .Where(c => pendingIdSet.Contains(c.PendingChangeId))
+                .Select(c => new
+                {
+                    c.PendingChangeId,
+                    c.ExpenseId,
+                    c.Result
+                })
+                .ToListAsync(cancellationToken);
+        var resultByPendingId = storedResults.ToDictionary(c => c.PendingChangeId);
+        var results = dedupedChanges
+            .Where(change => resultByPendingId.ContainsKey(change.PendingChangeId))
+            .Select(change => resultByPendingId[change.PendingChangeId])
+            .Where(change => change.Result is not null)
+            .Select(change => new ChangeResult(change.PendingChangeId, change.ExpenseId, change.Result!))
+            .ToList();
+
+        return Results.Ok(new PushResponse(
+            acceptedPendingIds,
+            acceptedAuditEntryIds,
+            results,
+            DateTimeOffset.UtcNow));
     }
 
     private static async Task<IResult> ProcessAsync(ExpenseSyncDbContext db, CancellationToken cancellationToken)
+    {
+        var processedChanges = await ProcessPendingChangesAsync(db, cancellationToken);
+
+        return Results.Ok(new ProcessResponse(processedChanges.Count, DateTimeOffset.UtcNow));
+    }
+
+    private static async Task<List<ProcessedChange>> ProcessPendingChangesAsync(
+        ExpenseSyncDbContext db,
+        CancellationToken cancellationToken)
     {
         var queuedChanges = await db.ReceivedChanges
             .Where(c => !c.IsProcessed)
             .OrderBy(c => c.CapturedAtUtc)
             .ToListAsync(cancellationToken);
 
+        var processedChanges = new List<ProcessedChange>(queuedChanges.Count);
         foreach (var change in queuedChanges)
         {
             var expense = await db.Expenses
                 .FirstOrDefaultAsync(e => e.ExpenseId == change.ExpenseId, cancellationToken);
+            var incomingLastModifiedUtc = change.Operation == ChangeOperation.Delete
+                ? change.CapturedAtUtc
+                : change.LastModifiedUtc;
+            var serverLastModifiedUtc = expense?.LastModifiedUtc;
+            var nowUtc = DateTime.UtcNow;
+            var result = "Applied";
 
-            switch (change.Operation)
+            if (expense is null)
             {
-                case ChangeOperation.Create:
-                    if (expense is null)
+                if (change.Operation != ChangeOperation.Delete)
+                {
+                    db.Expenses.Add(new Expense
                     {
-                        db.Expenses.Add(new Expense
-                        {
-                            ExpenseId = change.ExpenseId,
-                            Description = change.Description,
-                            Amount = change.Amount,
-                            ExpenseDate = change.ExpenseDate,
-                            LastModifiedUtc = change.LastModifiedUtc,
-                            IsDeleted = false,
-                            LastDeviceId = change.DeviceId,
-                            ServerUpdatedUtc = DateTime.UtcNow
-                        });
-                    }
-                    else
-                    {
-                        expense.Description = change.Description;
-                        expense.Amount = change.Amount;
-                        expense.ExpenseDate = change.ExpenseDate;
-                        expense.LastModifiedUtc = change.LastModifiedUtc;
-                        expense.IsDeleted = false;
-                        expense.LastDeviceId = change.DeviceId;
-                        expense.ServerUpdatedUtc = DateTime.UtcNow;
-                    }
-                    break;
-
-                case ChangeOperation.Update:
-                    if (expense is null)
-                    {
-                        db.Expenses.Add(new Expense
-                        {
-                            ExpenseId = change.ExpenseId,
-                            Description = change.Description,
-                            Amount = change.Amount,
-                            ExpenseDate = change.ExpenseDate,
-                            LastModifiedUtc = change.LastModifiedUtc,
-                            IsDeleted = false,
-                            LastDeviceId = change.DeviceId,
-                            ServerUpdatedUtc = DateTime.UtcNow
-                        });
-                    }
-                    else
-                    {
-                        expense.Description = change.Description;
-                        expense.Amount = change.Amount;
-                        expense.ExpenseDate = change.ExpenseDate;
-                        expense.LastModifiedUtc = change.LastModifiedUtc;
-                        expense.IsDeleted = false;
-                        expense.LastDeviceId = change.DeviceId;
-                        expense.ServerUpdatedUtc = DateTime.UtcNow;
-                    }
-                    break;
-
-                case ChangeOperation.Delete:
-                    if (expense is not null)
-                    {
-                        expense.IsDeleted = true;
-                        expense.LastModifiedUtc = change.CapturedAtUtc;
-                        expense.LastDeviceId = change.DeviceId;
-                        expense.ServerUpdatedUtc = DateTime.UtcNow;
-                    }
-                    break;
+                        ExpenseId = change.ExpenseId,
+                        Description = change.Description,
+                        Amount = change.Amount,
+                        ExpenseDate = change.ExpenseDate,
+                        LastModifiedUtc = incomingLastModifiedUtc,
+                        IsDeleted = false,
+                        LastDeviceId = change.DeviceId,
+                        ServerUpdatedUtc = nowUtc
+                    });
+                }
+            }
+            else if (incomingLastModifiedUtc <= expense.LastModifiedUtc)
+            {
+                expense.ServerUpdatedUtc = nowUtc;
+                result = "RejectedOlder";
+            }
+            else if (change.Operation == ChangeOperation.Delete)
+            {
+                expense.IsDeleted = true;
+                expense.LastModifiedUtc = incomingLastModifiedUtc;
+                expense.LastDeviceId = change.DeviceId;
+                expense.ServerUpdatedUtc = nowUtc;
+            }
+            else
+            {
+                expense.Description = change.Description;
+                expense.Amount = change.Amount;
+                expense.ExpenseDate = change.ExpenseDate;
+                expense.LastModifiedUtc = incomingLastModifiedUtc;
+                expense.IsDeleted = false;
+                expense.LastDeviceId = change.DeviceId;
+                expense.ServerUpdatedUtc = nowUtc;
             }
 
+            change.Result = result;
+            change.ServerLastModifiedUtc = serverLastModifiedUtc;
             change.IsProcessed = true;
-            change.ProcessedAtUtc = DateTime.UtcNow;
+            change.ProcessedAtUtc = nowUtc;
+            processedChanges.Add(new ProcessedChange(change.PendingChangeId, change.ExpenseId, result));
         }
 
         await db.SaveChangesAsync(cancellationToken);
 
-        return Results.Ok(new ProcessResponse(queuedChanges.Count, DateTimeOffset.UtcNow));
+        return processedChanges;
     }
 
     public sealed record PullRequest(
@@ -291,7 +376,8 @@ public static class SyncEndpoints
 
     public sealed record PushRequest(
         string DeviceId,
-        List<PushChange> Changes);
+        List<PushChange>? Changes,
+        List<PushAuditEntry>? AuditEntries = null);
 
     public sealed record PushChange(
         Guid PendingChangeId,
@@ -306,9 +392,30 @@ public static class SyncEndpoints
         DateOnly ExpenseDate,
         DateTime LastModifiedUtc);
 
+    public sealed record PushAuditEntry(
+        Guid AuditEntryId,
+        Guid ExpenseId,
+        ChangeOperation Operation,
+        DateTime OccurredAtUtc,
+        string DeviceId,
+        string UserId,
+        string Details);
+
     public sealed record PushResponse(
         List<Guid> AcceptedPendingChangeIds,
+        List<Guid> AcceptedAuditEntryIds,
+        List<ChangeResult> Results,
         DateTimeOffset ServerTimeUtc);
+
+    public sealed record ChangeResult(
+        Guid PendingChangeId,
+        Guid ExpenseId,
+        string Result);
+
+    private sealed record ProcessedChange(
+        Guid PendingChangeId,
+        Guid ExpenseId,
+        string Result);
 
     public sealed record ProcessResponse(
         int ProcessedCount,
