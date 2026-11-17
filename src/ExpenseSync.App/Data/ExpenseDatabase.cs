@@ -53,6 +53,7 @@ public class ExpenseDatabase
             await connection.CreateTableAsync<SyncAttempt>();
             await connection.CreateTableAsync<SyncState>();
             await connection.CreateTableAsync<IncomingChange>();
+            await connection.CreateTableAsync<ConflictResolution>();
             if (await connection.FindAsync<SyncState>(SyncState.SingletonId) is null)
             {
                 await connection.InsertAsync(new SyncState());
@@ -277,6 +278,47 @@ public class ExpenseDatabase
     {
         await InitializeAsync();
         return await database!.Table<AuditEntry>().CountAsync();
+    }
+
+    public async Task SaveConflictResolutionsAsync(IEnumerable<ConflictResolution> conflictResolutions)
+    {
+        await InitializeAsync();
+        var conflicts = conflictResolutions.ToList();
+        if (conflicts.Count == 0)
+        {
+            return;
+        }
+
+        await database!.RunInTransactionAsync(conn =>
+        {
+            foreach (var conflict in conflicts)
+            {
+                if (conn.Find<ConflictResolution>(conflict.PendingChangeId) is null)
+                {
+                    conn.Insert(conflict);
+                }
+            }
+        });
+    }
+
+    public async Task<List<ConflictResolution>> GetConflictResolutionsAsync()
+    {
+        await InitializeAsync();
+        return await database!.Table<ConflictResolution>()
+            .OrderBy(conflict => conflict.RecordedAtUtc)
+            .ToListAsync();
+    }
+
+    public async Task<List<IncomingChange>> GetConflictIncomingChangesAsync()
+    {
+        await InitializeAsync();
+        return (await database!.Table<IncomingChange>()
+                .Where(change => change.IsProcessed)
+                .ToListAsync())
+            .Where(change => change.Result is IncomingChangeResult.ConflictServerWins
+                or IncomingChangeResult.ConflictLocalWins)
+            .OrderBy(change => change.ProcessedAtUtc)
+            .ToList();
     }
 
     public async Task AddSyncAttemptAsync(SyncAttempt attempt)

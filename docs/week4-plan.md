@@ -1,4 +1,8 @@
-# Week 4 Plan: Pull Sync
+# Historical Week 4 Plan: Pull Sync
+
+This is the original planning document, retained as a record of the Week 4
+workflow. Its decisions and task assignments are historical; the current
+implementation and evidence are documented in the Week 4 section of README.md.
 
 Week 4 plan for the three of us. Each person's section has their tasks and a prompt to paste into the agent (it already has the `expensesync` skill).
 

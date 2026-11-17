@@ -1,0 +1,65 @@
+<ContentPage
+    x:Class="ExpenseSync.App.Views.ConflictHistoryPage"
+    xmlns:vm="clr-namespace:ExpenseSync.App.ViewModels"
+    x:DataType="vm:ConflictHistoryViewModel"
+    Title="Conflict history">
+
+    <Grid Padding="20" RowDefinitions="Auto,*" RowSpacing="12">
+        <Label
+            AutomationId="ConflictHistoryStatus"
+            Text="{Binding Status}"
+            FontSize="16" />
+
+        <CollectionView
+            Grid.Row="1"
+            AutomationId="ConflictHistoryList"
+            ItemsSource="{Binding Conflicts}"
+            SelectionMode="None">
+            <CollectionView.EmptyView>
+                <Label
+                    Text="No conflict outcomes yet. Sync after making competing edits to review how they were resolved."
+                    HorizontalOptions="Center"
+                    VerticalOptions="Center"
+                    HorizontalTextAlignment="Center" />
+            </CollectionView.EmptyView>
+            <CollectionView.ItemTemplate>
+                <DataTemplate x:DataType="vm:ConflictHistoryItem">
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="14,12"
+                        StrokeShape="RoundRectangle 8"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource OffBlack}}">
+                        <VerticalStackLayout Spacing="4">
+                            <Label
+                                Text="{Binding Outcome}"
+                                FontFamily="OpenSansSemibold"
+                                FontSize="16" />
+                            <Label
+                                Text="{Binding Description, StringFormat='{0}'}"
+                                FontSize="14" />
+                            <Label
+                                Text="{Binding Amount, StringFormat='Amount: {0:C}'}"
+                                FontSize="13" />
+                            <Label
+                                Text="{Binding Operation, StringFormat='Operation: {0}'}"
+                                FontSize="13" />
+                            <Label
+                                Text="{Binding DeviceId, StringFormat='Device: {0}'}"
+                                FontSize="13" />
+                            <Label
+                                Text="{Binding CapturedAtUtc, StringFormat='Captured (UTC): {0:u}'}"
+                                FontSize="12" />
+                            <Label
+                                Text="{Binding RecordedAtUtc, StringFormat='Resolved (UTC): {0:u}'}"
+                                FontSize="12" />
+                            <Label
+                                Text="{Binding ExpenseId, StringFormat='Expense ID: {0}'}"
+                                FontSize="10"
+                                LineBreakMode="CharacterWrap" />
+                        </VerticalStackLayout>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+    </Grid>
+</ContentPage>

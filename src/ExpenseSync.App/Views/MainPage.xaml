@@ -39,7 +39,7 @@
             Padding="16"
             StrokeShape="RoundRectangle 8"
             BackgroundColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource OffBlack}}">
-            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
                 <Label
                     Text="Local database"
                     FontFamily="OpenSansSemibold"
@@ -97,6 +97,12 @@
                     AutomationId="LastSyncAttemptLabel"
                     Text="{Binding LastSyncAttempt}"
                     FontSize="13" />
+                <Button
+                    Grid.Row="7"
+                    Grid.ColumnSpan="2"
+                    AutomationId="ConflictHistoryButton"
+                    Text="Conflict history"
+                    Command="{Binding ShowConflictHistoryCommand}" />
             </Grid>
         </Border>
 
