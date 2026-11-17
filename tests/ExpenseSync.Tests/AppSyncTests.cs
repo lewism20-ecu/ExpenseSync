@@ -78,6 +78,10 @@ public class AppSyncTests
         Assert.Empty(await secondDevice.Database.GetPendingChangesAsync());
         Assert.Empty(await firstDevice.Database.GetUnsyncedAuditEntriesAsync());
         Assert.Equal(0, await secondDevice.Database.GetAuditEntryCountAsync());
+        var conflict = Assert.Single(await firstDevice.Database.GetConflictResolutionsAsync());
+        Assert.Equal(expense.ExpenseId, conflict.ExpenseId);
+        Assert.Equal("RejectedOlder", conflict.Outcome);
+        Assert.Equal("device-01", conflict.DeviceId);
         await using var scope = api.App.Services.CreateAsyncScope();
         var server = scope.ServiceProvider.GetRequiredService<ExpenseSyncDbContext>();
         Assert.Equal(3, await server.AuditEntries.CountAsync());
@@ -118,6 +122,7 @@ public class AppSyncTests
         var incoming = Assert.Single(await device.Connection.Table<IncomingChange>().ToListAsync());
         Assert.Equal(serverWins ? IncomingChangeResult.ConflictServerWins : IncomingChangeResult.ConflictLocalWins,
             incoming.Result);
+        Assert.Equal(incoming.Result, Assert.Single(await device.Database.GetConflictIncomingChangesAsync()).Result);
     }
 
     [Fact]

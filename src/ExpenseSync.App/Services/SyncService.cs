@@ -196,7 +196,29 @@ public class SyncService
                 .ToList();
             var rejectedCount = (result?.Results ?? [])
                 .Count(changeResult => string.Equals(changeResult.Result, "RejectedOlder", StringComparison.Ordinal));
+            var pendingById = snapshots.ToDictionary(snapshot => snapshot.Change.PendingChangeId);
+            var conflictResolutions = (result?.Results ?? [])
+                .Where(changeResult => string.Equals(changeResult.Result, "RejectedOlder", StringComparison.Ordinal))
+                .Where(changeResult => pendingById.ContainsKey(changeResult.PendingChangeId))
+                .Select(changeResult =>
+                {
+                    var snapshot = pendingById[changeResult.PendingChangeId];
+                    return new ConflictResolution
+                    {
+                        PendingChangeId = snapshot.Change.PendingChangeId,
+                        ExpenseId = snapshot.Change.ExpenseId,
+                        Operation = snapshot.Change.Operation,
+                        Outcome = changeResult.Result,
+                        DeviceId = snapshot.Change.DeviceId,
+                        Description = snapshot.Expense?.Description ?? "(deleted expense)",
+                        Amount = snapshot.Expense?.Amount ?? 0m,
+                        CapturedAtUtc = DateTime.SpecifyKind(snapshot.Change.CapturedAtUtc, DateTimeKind.Utc),
+                        RecordedAtUtc = DateTime.UtcNow
+                    };
+                })
+                .ToList();
 
+            await database.SaveConflictResolutionsAsync(conflictResolutions);
             await database.ClearPendingChangesAsync(accepted);
             await database.MarkAuditEntriesSyncedAsync(acceptedAuditEntries);
 

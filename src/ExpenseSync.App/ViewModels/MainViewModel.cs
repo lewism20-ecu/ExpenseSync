@@ -143,4 +143,8 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private Task EditExpenseAsync(Expense expense) =>
         Shell.Current.GoToAsync($"{nameof(ExpenseEditPage)}?expenseId={expense.ExpenseId}");
+
+    [RelayCommand]
+    private Task ShowConflictHistoryAsync() =>
+        Shell.Current.GoToAsync(nameof(ConflictHistoryPage));
 }
